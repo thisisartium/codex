@@ -229,10 +229,7 @@ enabled = true
         .expect("installed plugins should be an array")
         .push(remote_only);
     let global_installed_body = serde_json::to_string(&global_installed_body)?;
-    mount_remote_installed_plugins(&server, "GLOBAL", &global_installed_body).await;
-    mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
-        .await;
-    mount_empty_user_installed_plugins(&server).await;
+    mount_unscoped_remote_installed_plugins(&server, &[global_installed_body.as_str()]).await;
 
     let mut app_server = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, app_server.initialize()).await??;
@@ -1501,10 +1498,7 @@ async fn app_server_startup_sync_downloads_remote_installed_plugin_bundles() -> 
         /*enabled*/ true,
         remote_app_manifest.clone(),
     );
-    mount_remote_installed_plugins(&server, "GLOBAL", &global_installed_body).await;
-    mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
-        .await;
-    mount_empty_user_installed_plugins(&server).await;
+    mount_unscoped_remote_installed_plugins(&server, &[global_installed_body.as_str()]).await;
 
     let installed_path = codex_home
         .path()
@@ -1573,10 +1567,7 @@ async fn plugin_list_sync_upgrades_and_removes_remote_installed_plugin_bundles()
     );
     mount_remote_plugin_list(&server, "GLOBAL", &global_installed_body).await;
     mount_remote_plugin_list(&server, "WORKSPACE", empty_remote_installed_plugins_body()).await;
-    mount_remote_installed_plugins(&server, "GLOBAL", &global_installed_body).await;
-    mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
-        .await;
-    mount_empty_user_installed_plugins(&server).await;
+    mount_unscoped_remote_installed_plugins(&server, &[global_installed_body.as_str()]).await;
 
     let old_path = codex_home
         .path()
@@ -1745,24 +1736,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
         .respond_with(ResponseTemplate::new(200).set_body_string(empty_page_body))
         .mount(&server)
         .await;
-    Mock::given(method("GET"))
-        .and(path("/backend-api/ps/plugins/installed"))
-        .and(query_param("scope", "GLOBAL"))
-        .and(header("authorization", "Bearer chatgpt-token"))
-        .and(header("chatgpt-account-id", "account-123"))
-        .and(header("oai-product-sku", "codex"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(global_installed_body))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/backend-api/ps/plugins/installed"))
-        .and(query_param("scope", "WORKSPACE"))
-        .and(header("authorization", "Bearer chatgpt-token"))
-        .and(header("chatgpt-account-id", "account-123"))
-        .and(header("oai-product-sku", "codex"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(empty_page_body))
-        .mount(&server)
-        .await;
+    mount_unscoped_remote_installed_plugins(&server, &[global_installed_body]).await;
     Mock::given(method("GET"))
         .and(path("/backend-api/plugins/featured"))
         .and(query_param("platform", "codex"))
@@ -1910,10 +1884,7 @@ async fn plugin_list_uses_cached_global_remote_catalog_and_refreshes_it() -> Res
         "Capture notes",
     );
     mount_remote_plugin_list(&server, "GLOBAL", &cached_body).await;
-    mount_remote_installed_plugins(&server, "GLOBAL", empty_remote_installed_plugins_body()).await;
-    mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
-        .await;
-    mount_empty_user_installed_plugins(&server).await;
+    mount_unscoped_remote_installed_plugins(&server, &[]).await;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -1946,10 +1917,7 @@ async fn plugin_list_uses_cached_global_remote_catalog_and_refreshes_it() -> Res
 
     server.reset().await;
     mount_remote_plugin_list(&server, "GLOBAL", &refreshed_body).await;
-    mount_remote_installed_plugins(&server, "GLOBAL", empty_remote_installed_plugins_body()).await;
-    mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
-        .await;
-    mount_empty_user_installed_plugins(&server).await;
+    mount_unscoped_remote_installed_plugins(&server, &[]).await;
 
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
@@ -2024,10 +1992,7 @@ async fn plugin_list_includes_openai_curated_remote_collection_when_requested() 
   }
 }"#;
     mount_openai_curated_remote_collection_plugin_list(&server, collection_body).await;
-    mount_remote_installed_plugins(&server, "GLOBAL", empty_remote_installed_plugins_body()).await;
-    mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
-        .await;
-    mount_empty_user_installed_plugins(&server).await;
+    mount_unscoped_remote_installed_plugins(&server, &[]).await;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -2112,10 +2077,7 @@ async fn plugin_list_propagates_explicit_openai_curated_remote_collection_errors
         .respond_with(ResponseTemplate::new(500).set_body_string("temporary failure"))
         .mount(&server)
         .await;
-    mount_remote_installed_plugins(&server, "GLOBAL", empty_remote_installed_plugins_body()).await;
-    mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
-        .await;
-    mount_empty_user_installed_plugins(&server).await;
+    mount_unscoped_remote_installed_plugins(&server, &[]).await;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -2431,9 +2393,14 @@ plugin_sharing = true
         .push(unlisted_installed_body["plugins"][0].clone());
     let workspace_installed_body = serde_json::to_string(&workspace_installed_body)?;
     let global_installed_body = remote_installed_plugin_body("", "1.2.3", /*enabled*/ true);
-    mount_remote_installed_plugins(&server, "GLOBAL", &global_installed_body).await;
-    mount_remote_installed_plugins(&server, "WORKSPACE", &workspace_installed_body).await;
-    mount_empty_user_installed_plugins(&server).await;
+    mount_unscoped_remote_installed_plugins(
+        &server,
+        &[
+            global_installed_body.as_str(),
+            workspace_installed_body.as_str(),
+        ],
+    )
+    .await;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -2481,8 +2448,7 @@ plugin_sharing = true
             )
         ]
     );
-    wait_for_remote_installed_scope_request(&server, "WORKSPACE").await?;
-    wait_for_remote_installed_scope_request(&server, "GLOBAL").await?;
+    wait_for_unscoped_remote_installed_request(&server).await?;
     Ok(())
 }
 
@@ -2532,9 +2498,7 @@ plugin_sharing = false
         .expect("installed plugins should be an array")
         .push(shared_installed_body["plugins"][0].clone());
     let workspace_installed_body = serde_json::to_string(&workspace_installed_body)?;
-    mount_remote_installed_plugins(&server, "GLOBAL", empty_remote_installed_plugins_body()).await;
-    mount_remote_installed_plugins(&server, "WORKSPACE", &workspace_installed_body).await;
-    mount_empty_user_installed_plugins(&server).await;
+    mount_unscoped_remote_installed_plugins(&server, &[workspace_installed_body.as_str()]).await;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -2568,8 +2532,7 @@ plugin_sharing = false
             true
         )]
     );
-    wait_for_remote_installed_scope_request(&server, "WORKSPACE").await?;
-    wait_for_remote_installed_scope_request(&server, "GLOBAL").await?;
+    wait_for_unscoped_remote_installed_request(&server).await?;
     Ok(())
 }
 
@@ -2598,9 +2561,6 @@ plugin_sharing = false
             .chatgpt_account_id("account-123"),
         AuthCredentialsStoreMode::File,
     )?;
-    mount_remote_installed_plugins(&server, "GLOBAL", empty_remote_installed_plugins_body()).await;
-    mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
-        .await;
     let bundle_url = mount_remote_plugin_bundle(
         &server,
         "private-linear",
@@ -2617,12 +2577,8 @@ plugin_sharing = false
         ))?;
     user_installed_body["plugins"][0]["release"]["bundle_download_url"] =
         serde_json::json!(bundle_url);
-    mount_remote_installed_plugins(
-        &server,
-        "USER",
-        &serde_json::to_string(&user_installed_body)?,
-    )
-    .await;
+    let user_installed_body = serde_json::to_string(&user_installed_body)?;
+    mount_unscoped_remote_installed_plugins(&server, &[user_installed_body.as_str()]).await;
 
     let mut mcp = TestAppServer::new_with_env(
         codex_home.path(),
@@ -2660,7 +2616,7 @@ plugin_sharing = false
         ),
     )
     .await?;
-    wait_for_remote_installed_scope_request(&server, "USER").await?;
+    wait_for_unscoped_remote_installed_request(&server).await?;
     Ok(())
 }
 
@@ -2698,10 +2654,7 @@ plugin_sharing = false
     .await;
     let global_installed_body =
         remote_installed_plugin_body(&bundle_url, "1.2.3", /*enabled*/ true);
-    mount_remote_installed_plugins(&server, "GLOBAL", &global_installed_body).await;
-    mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
-        .await;
-    mount_empty_user_installed_plugins(&server).await;
+    mount_unscoped_remote_installed_plugins(&server, &[global_installed_body.as_str()]).await;
 
     let mut mcp = TestAppServer::new_with_env(
         codex_home.path(),
@@ -2738,8 +2691,7 @@ plugin_sharing = false
         .path()
         .join("plugins/cache/openai-curated-remote/linear/1.2.3/.codex-plugin/plugin.json");
     wait_for_path_exists(&installed_path).await?;
-    wait_for_remote_installed_scope_request(&server, "GLOBAL").await?;
-    wait_for_remote_installed_scope_request(&server, "WORKSPACE").await?;
+    wait_for_unscoped_remote_installed_request(&server).await?;
     Ok(())
 }
 
@@ -2775,8 +2727,7 @@ async fn plugin_list_fetches_workspace_directory_kind_without_remote_plugin_flag
         /*enabled*/ Some(false),
     );
     mount_remote_plugin_list(&server, "WORKSPACE", &workspace_plugin_body).await;
-    mount_remote_installed_plugins(&server, "WORKSPACE", &workspace_installed_body).await;
-    mount_empty_user_installed_plugins(&server).await;
+    mount_unscoped_remote_installed_plugins(&server, &[workspace_installed_body.as_str()]).await;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -2889,21 +2840,14 @@ plugin_sharing = false
         )
         .mount(&server)
         .await;
-    mount_remote_installed_plugins(
-        &server,
-        "USER",
-        &user_remote_plugin_page_body(
-            "plugins~Plugin_55555555555555555555555555555555",
-            "private-linear",
-            "Private Linear",
-            "PRIVATE",
-            /*enabled*/ Some(true),
-        ),
-    )
-    .await;
-    mount_remote_installed_plugins(&server, "GLOBAL", empty_remote_installed_plugins_body()).await;
-    mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
-        .await;
+    let user_installed_body = user_remote_plugin_page_body(
+        "plugins~Plugin_55555555555555555555555555555555",
+        "private-linear",
+        "Private Linear",
+        "PRIVATE",
+        /*enabled*/ Some(true),
+    );
+    mount_unscoped_remote_installed_plugins(&server, &[user_installed_body.as_str()]).await;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -3028,9 +2972,7 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         .push(unlisted_installed_body["plugins"][0].clone());
     let workspace_installed_body = serde_json::to_string(&workspace_installed_body)?;
     mount_shared_workspace_plugins(&server, &shared_plugin_body).await;
-    mount_remote_installed_plugins(&server, "GLOBAL", empty_remote_installed_plugins_body()).await;
-    mount_remote_installed_plugins(&server, "WORKSPACE", &workspace_installed_body).await;
-    mount_empty_user_installed_plugins(&server).await;
+    mount_unscoped_remote_installed_plugins(&server, &[workspace_installed_body.as_str()]).await;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -3158,8 +3100,7 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         share_context.discoverability,
         Some(PluginShareDiscoverability::Unlisted)
     );
-    wait_for_remote_installed_scope_request(&server, "WORKSPACE").await?;
-    wait_for_remote_installed_scope_request(&server, "GLOBAL").await?;
+    wait_for_unscoped_remote_installed_request(&server).await?;
     wait_for_remote_plugin_request_count(&server, "/ps/plugins/list", /*expected_count*/ 0).await?;
     Ok(())
 }
@@ -3365,19 +3306,7 @@ async fn plugin_list_marks_remote_plugin_disabled_by_admin() -> Result<()> {
             .mount(&server)
             .await;
     }
-    for (scope, body) in [
-        ("GLOBAL", global_installed_body),
-        ("WORKSPACE", empty_page_body),
-    ] {
-        Mock::given(method("GET"))
-            .and(path("/backend-api/ps/plugins/installed"))
-            .and(query_param("scope", scope))
-            .and(header("authorization", "Bearer chatgpt-token"))
-            .and(header("chatgpt-account-id", "account-123"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(body))
-            .mount(&server)
-            .await;
-    }
+    mount_unscoped_remote_installed_plugins(&server, &[global_installed_body]).await;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -3585,7 +3514,7 @@ async fn wait_for_remote_plugin_request_count(
     Ok(())
 }
 
-async fn wait_for_remote_installed_scope_request(server: &MockServer, scope: &str) -> Result<()> {
+async fn wait_for_unscoped_remote_installed_request(server: &MockServer) -> Result<()> {
     timeout(DEFAULT_TIMEOUT, async {
         loop {
             let Some(requests) = server.received_requests().await else {
@@ -3594,10 +3523,7 @@ async fn wait_for_remote_installed_scope_request(server: &MockServer, scope: &st
             if requests.iter().any(|request| {
                 request.method == "GET"
                     && request.url.path().ends_with("/ps/plugins/installed")
-                    && request
-                        .url
-                        .query_pairs()
-                        .any(|(name, value)| name == "scope" && value == scope)
+                    && request.url.query_pairs().all(|(name, _)| name != "scope")
             }) {
                 return Ok::<(), anyhow::Error>(());
             }
@@ -3753,19 +3679,34 @@ async fn mount_shared_workspace_plugins(server: &MockServer, body: &str) {
         .await;
 }
 
-async fn mount_remote_installed_plugins(server: &MockServer, scope: &str, body: &str) {
+async fn mount_unscoped_remote_installed_plugins(server: &MockServer, bodies: &[&str]) {
+    let plugins = bodies
+        .iter()
+        .flat_map(|body| {
+            serde_json::from_str::<serde_json::Value>(body)
+                .expect("installed plugin response should be valid JSON")["plugins"]
+                .as_array()
+                .expect("installed plugin response should contain a plugins array")
+                .clone()
+        })
+        .collect::<Vec<_>>();
     Mock::given(method("GET"))
         .and(path("/backend-api/ps/plugins/installed"))
-        .and(query_param("scope", scope))
+        .and(query_param_is_missing("scope"))
+        .and(query_param("includeDownloadUrls", "true"))
+        .and(query_param("limit", "1000"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .and(header("oai-product-sku", "codex"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "plugins": plugins,
+            "pagination": {
+                "limit": 1000,
+                "next_page_token": null,
+            }
+        })))
         .mount(server)
         .await;
-}
-
-async fn mount_empty_user_installed_plugins(server: &MockServer) {
-    mount_remote_installed_plugins(server, "USER", empty_remote_installed_plugins_body()).await;
 }
 
 fn empty_remote_installed_plugins_body() -> &'static str {
