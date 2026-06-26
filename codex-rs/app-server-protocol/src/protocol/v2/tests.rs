@@ -2861,6 +2861,7 @@ fn skills_list_params_serialization_uses_force_reload() {
         serde_json::to_value(SkillsListParams {
             cwds: Vec::new(),
             force_reload: false,
+            thread_id: None,
         })
         .unwrap(),
         json!({}),
@@ -2870,6 +2871,7 @@ fn skills_list_params_serialization_uses_force_reload() {
         serde_json::to_value(SkillsListParams {
             cwds: vec![PathBuf::from("/repo")],
             force_reload: true,
+            thread_id: None,
         })
         .unwrap(),
         json!({
