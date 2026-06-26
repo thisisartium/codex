@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+codex-backend-client = { workspace = true }
 codex-connectors = { workspace = true }
 codex-core = { workspace = true }
 codex-git-utils = { workspace = true }
@@ -21,10 +22,12 @@ serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
+base64 = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+wiremock = { workspace = true }
 
 [lib]
 doctest = false

@@ -30,6 +30,7 @@ pub(crate) type PromptSubmitted = Box<dyn Fn(String) + Send + Sync>;
 
 /// Minimal multi-line text input view to collect custom review instructions.
 pub(crate) struct CustomPromptView {
+    view_id: Option<&'static str>,
     title: String,
     placeholder: String,
     context_label: Option<String>,
@@ -57,6 +58,7 @@ impl CustomPromptView {
         }
 
         Self {
+            view_id: None,
             title,
             placeholder,
             context_label,
@@ -66,6 +68,11 @@ impl CustomPromptView {
             paste_burst: PasteBurst::default(),
             completion: None,
         }
+    }
+
+    pub(crate) fn with_view_id(mut self, view_id: &'static str) -> Self {
+        self.view_id = Some(view_id);
+        self
     }
 
     fn handle_key_event_at(&mut self, key_event: KeyEvent, now: Instant) {
@@ -141,6 +148,10 @@ impl BottomPaneView for CustomPromptView {
 
     fn completion(&self) -> Option<ViewCompletion> {
         self.completion
+    }
+
+    fn view_id(&self) -> Option<&'static str> {
+        self.view_id
     }
 
     fn handle_paste(&mut self, pasted: String) -> bool {

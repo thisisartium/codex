@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/tests/referrals.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Send referral invite?
+  You and the recipient can each earn a usage limit reset.
+  Recipient: friend@example.com
+  • They must be new to Codex.
+  By sending, you confirm that you have this person's consent.
+
+  1. Send invite
+› 2. Cancel
+
+  Press enter to confirm or esc to go back

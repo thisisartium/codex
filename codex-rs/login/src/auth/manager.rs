@@ -1607,6 +1607,7 @@ pub struct UnauthorizedRecovery {
     manager: Arc<AuthManager>,
     step: UnauthorizedRecoveryStep,
     expected_account_id: Option<String>,
+    expected_chatgpt_user_id: Option<String>,
     mode: UnauthorizedRecoveryMode,
 }
 
@@ -1625,6 +1626,9 @@ impl UnauthorizedRecovery {
     fn new(manager: Arc<AuthManager>) -> Self {
         let cached_auth = manager.auth_cached();
         let expected_account_id = cached_auth.as_ref().and_then(CodexAuth::get_account_id);
+        let expected_chatgpt_user_id = cached_auth
+            .as_ref()
+            .and_then(CodexAuth::get_chatgpt_user_id);
         let mode = if manager.has_external_api_key_auth()
             || cached_auth
                 .as_ref()
@@ -1642,6 +1646,7 @@ impl UnauthorizedRecovery {
             manager,
             step,
             expected_account_id,
+            expected_chatgpt_user_id,
             mode,
         }
     }
@@ -1733,7 +1738,10 @@ impl UnauthorizedRecovery {
             UnauthorizedRecoveryStep::Reload => {
                 match self
                     .manager
-                    .reload_if_account_id_matches(self.expected_account_id.as_deref())
+                    .reload_if_identity_matches(
+                        self.expected_account_id.as_deref(),
+                        self.expected_chatgpt_user_id.as_deref(),
+                    )
                     .await
                 {
                     ReloadOutcome::ReloadedChanged => {
@@ -2128,9 +2136,10 @@ impl AuthManager {
         self.set_cached_auth(new_auth)
     }
 
-    async fn reload_if_account_id_matches(
+    async fn reload_if_identity_matches(
         &self,
         expected_account_id: Option<&str>,
+        expected_chatgpt_user_id: Option<&str>,
     ) -> ReloadOutcome {
         let expected_account_id = match expected_account_id {
             Some(account_id) => account_id,
@@ -2142,12 +2151,13 @@ impl AuthManager {
 
         let new_auth = self.load_auth_from_storage().await;
         let new_account_id = new_auth.as_ref().and_then(CodexAuth::get_account_id);
+        let new_chatgpt_user_id = new_auth.as_ref().and_then(CodexAuth::get_chatgpt_user_id);
 
-        if new_account_id.as_deref() != Some(expected_account_id) {
-            let found_account_id = new_account_id.as_deref().unwrap_or("unknown");
-            tracing::info!(
-                "Skipping auth reload due to account id mismatch (expected: {expected_account_id}, found: {found_account_id})"
-            );
+        if new_account_id.as_deref() != Some(expected_account_id)
+            || expected_chatgpt_user_id
+                .is_some_and(|expected| new_chatgpt_user_id.as_deref() != Some(expected))
+        {
+            tracing::info!("Skipping auth reload due to ChatGPT identity mismatch");
             return ReloadOutcome::Skipped;
         }
 
@@ -2371,8 +2381,8 @@ impl AuthManager {
     }
 
     /// Attempt to refresh the token by first performing a guarded reload. Auth
-    /// is reloaded from storage only when the account id matches the currently
-    /// cached account id. If the persisted token differs from the cached token, we
+    /// is reloaded from storage only when the ChatGPT user and account match the
+    /// currently cached identity. If the persisted token differs from the cached token, we
     /// can assume that some other instance already refreshed it. If the persisted
     /// token is the same as the cached, then ask the token authority to refresh.
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
@@ -2392,9 +2402,15 @@ impl AuthManager {
         let expected_account_id = auth_before_reload
             .as_ref()
             .and_then(CodexAuth::get_account_id);
+        let expected_chatgpt_user_id = auth_before_reload
+            .as_ref()
+            .and_then(CodexAuth::get_chatgpt_user_id);
 
         match self
-            .reload_if_account_id_matches(expected_account_id.as_deref())
+            .reload_if_identity_matches(
+                expected_account_id.as_deref(),
+                expected_chatgpt_user_id.as_deref(),
+            )
             .await
         {
             ReloadOutcome::ReloadedChanged => {

@@ -31,6 +31,10 @@ const TOKEN_ACTIVITY_FETCH_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(/*secs*/ 15);
 const RATE_LIMIT_RESET_REQUEST_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(/*secs*/ 15);
+const REFERRAL_OFFER_REQUEST_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(/*secs*/ 15);
+const REFERRAL_SEND_REQUEST_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(/*secs*/ 45);
 const WORKSPACE_HEADLINE_FETCH_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(/*millis*/ 2000);
 
@@ -134,6 +138,63 @@ impl App {
             .map_err(|_| "account/rateLimits/read timed out in TUI".to_string())
             .and_then(|result| result.map_err(|err| err.to_string()));
             app_event_tx.send(AppEvent::RateLimitResetCreditsLoaded { request_id, result });
+        });
+    }
+
+    pub(super) fn refresh_referral_invite_offer(&mut self, request_id: Uuid) {
+        let app_event_tx = self.app_event_tx.clone();
+        let Some(referral_session) = self.referral_session.clone() else {
+            app_event_tx.send(AppEvent::ReferralInviteOfferLoaded {
+                request_id,
+                result: Ok(None),
+            });
+            return;
+        };
+        tokio::spawn(async move {
+            let result = tokio::time::timeout(
+                REFERRAL_OFFER_REQUEST_TIMEOUT,
+                referral_session.load_persistent_referral_invite_offer(),
+            )
+            .await
+            .map_err(|_| codex_chatgpt::referrals::ReferralError::RequestTimedOut)
+            .and_then(std::convert::identity);
+            app_event_tx.send(AppEvent::ReferralInviteOfferLoaded { request_id, result });
+        });
+    }
+
+    pub(super) fn send_referral_invite(
+        &mut self,
+        request_id: Uuid,
+        expected_identity: codex_chatgpt::referrals::ReferralIdentity,
+        email: String,
+    ) {
+        let app_event_tx = self.app_event_tx.clone();
+        let Some(referral_session) = self.referral_session.clone() else {
+            app_event_tx.send(AppEvent::ReferralInviteSent {
+                request_id,
+                email,
+                result: Err(codex_chatgpt::referrals::ReferralError::UnsupportedClient),
+            });
+            return;
+        };
+        tokio::spawn(async move {
+            let result = tokio::time::timeout(
+                REFERRAL_SEND_REQUEST_TIMEOUT,
+                referral_session.send_persistent_referral_invite(&expected_identity, &email),
+            )
+            .await
+            .map_err(|_| codex_chatgpt::referrals::ReferralError::RequestTimedOut)
+            .and_then(std::convert::identity)
+            .map(|response| match response.has_rewards {
+                Some(true) => ReferralInviteRewardStatus::Included,
+                Some(false) => ReferralInviteRewardStatus::NotIncluded,
+                None => ReferralInviteRewardStatus::Unknown,
+            });
+            app_event_tx.send(AppEvent::ReferralInviteSent {
+                request_id,
+                email,
+                result,
+            });
         });
     }
 

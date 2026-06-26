@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests/referrals.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+▌ Invite someone to Codex
+▌ Enter one email address, then press Enter.
+▌
+▌ name@example.com
+
+Press enter to confirm or esc to go back

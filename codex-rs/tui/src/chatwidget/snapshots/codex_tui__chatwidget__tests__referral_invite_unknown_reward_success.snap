@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests/referrals.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Invite someone to Codex
+  Invite sent to friend@example.com; reward status wasn't confirmed.
+
+› 1. Close
+
+  Press enter to confirm or esc to go back

@@ -125,6 +125,17 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
         return;
     }
 
+    if let Some(variant) = redacted_referral_event_variant(event) {
+        let value = json!({
+            "ts": now_ts(),
+            "dir": "to_tui",
+            "kind": "app_event",
+            "variant": variant,
+        });
+        LOGGER.write_json_line(value);
+        return;
+    }
+
     match event {
         AppEvent::NewSession => {
             let value = json!({
@@ -210,6 +221,18 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
     }
 }
 
+fn redacted_referral_event_variant(event: &AppEvent) -> Option<&'static str> {
+    match event {
+        AppEvent::RefreshReferralInviteOffer { .. } => Some("RefreshReferralInviteOffer"),
+        AppEvent::ReferralInviteOfferLoaded { .. } => Some("ReferralInviteOfferLoaded"),
+        AppEvent::OpenReferralInviteEmailPrompt { .. } => Some("OpenReferralInviteEmailPrompt"),
+        AppEvent::OpenReferralInviteConfirmation { .. } => Some("OpenReferralInviteConfirmation"),
+        AppEvent::SendReferralInvite { .. } => Some("SendReferralInvite"),
+        AppEvent::ReferralInviteSent { .. } => Some("ReferralInviteSent"),
+        _ => None,
+    }
+}
+
 pub(crate) fn log_outbound_op(op: &AppCommand) {
     if !LOGGER.is_enabled() {
         return;
@@ -241,3 +264,7 @@ where
     });
     LOGGER.write_json_line(value);
 }
+
+#[cfg(test)]
+#[path = "session_log_tests.rs"]
+mod tests;

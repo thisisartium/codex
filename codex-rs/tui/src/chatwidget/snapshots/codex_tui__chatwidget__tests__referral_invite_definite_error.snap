@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/referrals.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Invite someone to Codex
+  The invite wasn't sent. Check the email or your eligibility.
+
+› 1. Edit email
+  2. Close
+
+  Press enter to confirm or esc to go back

@@ -116,6 +116,7 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnPlanStepStatus;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
+use codex_chatgpt::referrals::PersistentReferralInviteOffer;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::Constrained;
 use codex_config::ConstraintResult;
@@ -185,6 +186,7 @@ use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
 use tracing::warn;
+use uuid::Uuid;
 
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 const MULTI_AGENT_ENABLE_TITLE: &str = "Enable subagents?";
@@ -260,6 +262,7 @@ use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event::PermissionProfileSelection;
 use crate::app_event::RateLimitRefreshOrigin;
+use crate::app_event::ReferralInviteRewardStatus;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -388,6 +391,7 @@ pub(crate) use self::rate_limits::fallback_limit_label;
 use self::rate_limits::is_app_server_cyber_policy_error;
 pub(crate) use self::rate_limits::limit_label_for_window;
 mod reasoning_shortcuts;
+mod referrals;
 mod rendering;
 mod replay;
 mod review;
@@ -562,6 +566,9 @@ pub(crate) struct ChatWidget {
     pending_rate_limit_reset_hint: Option<PlainHistoryCell>,
     available_rate_limit_reset_credits: Option<i64>,
     next_rate_limit_reset_request_id: u64,
+    referral_invite_offer: Option<PersistentReferralInviteOffer>,
+    pending_referral_offer_request_id: Option<Uuid>,
+    pending_referral_send_request_id: Option<Uuid>,
     plan_type: Option<PlanType>,
     codex_rate_limit_reached_type: Option<RateLimitReachedType>,
     rate_limit_warnings: RateLimitWarningState,

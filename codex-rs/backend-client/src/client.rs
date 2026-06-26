@@ -31,6 +31,7 @@ use serde::de::DeserializeOwned;
 use std::fmt;
 
 mod rate_limit_resets;
+mod referrals;
 
 #[derive(Debug)]
 pub enum RequestError {

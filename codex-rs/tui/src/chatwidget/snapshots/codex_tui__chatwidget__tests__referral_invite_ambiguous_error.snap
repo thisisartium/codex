@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests/referrals.rs
+expression: rendered
+---
+  Invite someone to Codex
+  We couldn't confirm the invite. Ask the recipient before trying again.
+
+› 1. Close
+
+  Press enter to confirm or esc to go back

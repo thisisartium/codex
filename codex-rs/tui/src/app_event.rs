@@ -28,12 +28,15 @@ use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
+use codex_chatgpt::referrals::PersistentReferralInviteOffer;
+use codex_chatgpt::referrals::ReferralError;
 use codex_connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
+use uuid::Uuid;
 
 use crate::app_command::AppCommand;
 use crate::app_server_session::AppServerStartedThread;
@@ -319,6 +322,39 @@ pub(crate) enum AppEvent {
 
     /// Open the default token-activity view selected from the `/usage` menu.
     OpenTokenActivity,
+
+    /// Check whether the signed-in account can send a rewarded referral invite.
+    RefreshReferralInviteOffer {
+        request_id: Uuid,
+    },
+
+    /// Result of loading the referral offer and its eligibility rules.
+    ReferralInviteOfferLoaded {
+        request_id: Uuid,
+        result: Result<Option<PersistentReferralInviteOffer>, ReferralError>,
+    },
+
+    /// Open the single-email referral input, optionally restoring a previous value.
+    OpenReferralInviteEmailPrompt {
+        initial_email: Option<String>,
+    },
+
+    /// Show the referral terms and final send confirmation.
+    OpenReferralInviteConfirmation {
+        email: String,
+    },
+
+    /// Send one referral invite after confirmation.
+    SendReferralInvite {
+        email: String,
+    },
+
+    /// Result of sending a referral invite.
+    ReferralInviteSent {
+        request_id: Uuid,
+        email: String,
+        result: Result<ReferralInviteRewardStatus, ReferralError>,
+    },
 
     /// Open the reset-credit flow selected from the `/usage` menu.
     OpenRateLimitResetCredits,
@@ -1071,6 +1107,13 @@ pub(crate) enum AppEvent {
         context: String,
         action: String,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReferralInviteRewardStatus {
+    Included,
+    NotIncluded,
+    Unknown,
 }
 
 /// Named profile selection to apply after any required UI guardrails complete.

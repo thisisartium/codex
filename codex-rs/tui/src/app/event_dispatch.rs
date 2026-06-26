@@ -912,6 +912,48 @@ impl App {
                 self.chat_widget
                     .add_token_activity_output(crate::chatwidget::TokenActivityView::Daily);
             }
+            AppEvent::RefreshReferralInviteOffer { request_id } => {
+                if app_server.uses_embedded_app_server() {
+                    self.refresh_referral_invite_offer(request_id);
+                } else {
+                    self.chat_widget
+                        .finish_referral_invite_offer_refresh(request_id, Ok(None));
+                }
+            }
+            AppEvent::ReferralInviteOfferLoaded { request_id, result } => {
+                self.chat_widget
+                    .finish_referral_invite_offer_refresh(request_id, result);
+            }
+            AppEvent::OpenReferralInviteEmailPrompt { initial_email } => {
+                self.chat_widget
+                    .show_referral_invite_email_prompt(initial_email);
+            }
+            AppEvent::OpenReferralInviteConfirmation { email } => {
+                self.chat_widget.show_referral_invite_confirmation(email);
+            }
+            AppEvent::SendReferralInvite { email } => {
+                if let Some((request_id, expected_identity)) =
+                    self.chat_widget.start_referral_invite_send(&email)
+                {
+                    if app_server.uses_embedded_app_server() {
+                        self.send_referral_invite(request_id, expected_identity, email);
+                    } else {
+                        self.chat_widget.finish_referral_invite_send(
+                            request_id,
+                            &email,
+                            Err(codex_chatgpt::referrals::ReferralError::UnsupportedClient),
+                        );
+                    }
+                }
+            }
+            AppEvent::ReferralInviteSent {
+                request_id,
+                email,
+                result,
+            } => {
+                self.chat_widget
+                    .finish_referral_invite_send(request_id, &email, result);
+            }
             AppEvent::OpenRateLimitResetCredits => {
                 let request_id = self.chat_widget.show_rate_limit_reset_loading_popup();
                 self.refresh_rate_limit_reset_credits(app_server, request_id);

@@ -18,6 +18,57 @@ use serde::de::Deserializer;
 use serde_json::Value;
 use std::collections::HashMap;
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferralGrantAction {
+    WorkspaceCredits,
+    RateLimitResetCredit,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct PersistentReferralInviteEligibility {
+    pub should_show: bool,
+    #[serde(default)]
+    pub ineligible_reason: Option<String>,
+    #[serde(default)]
+    pub ineligible_reason_code: Option<String>,
+    #[serde(default)]
+    pub remaining_referrals: Option<i64>,
+    pub grant_action: ReferralGrantAction,
+    pub grant_amount: i64,
+    #[serde(default)]
+    pub has_rewards: bool,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct ReferralEligibilityRules {
+    #[serde(default)]
+    pub rules: Vec<String>,
+    pub requires_explicit_confirmation: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct ReferralInvite {
+    pub referral_id: String,
+    pub email: String,
+    pub invite_url: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct ReferralInviteResponse {
+    pub referral_id: String,
+    pub email: String,
+    pub invites: Vec<ReferralInvite>,
+    #[serde(default)]
+    pub has_rewards: Option<bool>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct RateLimitResetCreditsSummary {
     pub available_count: i64,

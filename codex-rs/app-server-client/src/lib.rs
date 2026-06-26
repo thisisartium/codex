@@ -45,6 +45,7 @@ use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_arg0::Arg0DispatchPaths;
+use codex_chatgpt::referrals::ReferralSession;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
@@ -58,6 +59,7 @@ use codex_core::personality_migration::maybe_migrate_personality;
 pub use codex_exec_server::EnvironmentManager;
 pub use codex_exec_server::ExecServerRuntimePaths;
 use codex_feedback::CodexFeedback;
+use codex_login::AuthManager;
 use codex_protocol::protocol::SessionSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::de::DeserializeOwned;
@@ -456,6 +458,7 @@ pub struct InProcessAppServerClient {
     command_tx: mpsc::Sender<ClientCommand>,
     event_rx: mpsc::Receiver<InProcessServerEvent>,
     worker_handle: tokio::task::JoinHandle<()>,
+    referral_session: Arc<ReferralSession>,
 }
 
 #[derive(Clone)]
@@ -482,8 +485,18 @@ impl InProcessAppServerClient {
     /// with overload error instead of being silently dropped.
     pub async fn start(args: InProcessClientStartArgs) -> IoResult<Self> {
         let channel_capacity = args.channel_capacity.max(1);
-        let mut handle =
-            codex_app_server::in_process::start(args.into_runtime_start_args()).await?;
+        let auth_manager =
+            AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env)
+                .await;
+        let referral_session = Arc::new(ReferralSession::from_auth_manager(
+            Arc::clone(&auth_manager),
+            args.config.chatgpt_base_url.clone(),
+        ));
+        let mut handle = codex_app_server::in_process::start_with_auth_manager(
+            args.into_runtime_start_args(),
+            auth_manager,
+        )
+        .await?;
         let request_sender = handle.sender();
         let (command_tx, mut command_rx) = mpsc::channel::<ClientCommand>(channel_capacity);
         let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
@@ -596,7 +609,13 @@ impl InProcessAppServerClient {
             command_tx,
             event_rx,
             worker_handle,
+            referral_session,
         })
+    }
+
+    /// Returns the referral client bound to this embedded runtime's auth state.
+    pub fn referral_session(&self) -> Arc<ReferralSession> {
+        Arc::clone(&self.referral_session)
     }
 
     pub fn request_handle(&self) -> InProcessAppServerRequestHandle {
@@ -757,6 +776,7 @@ impl InProcessAppServerClient {
             command_tx,
             event_rx,
             worker_handle,
+            referral_session: _,
         } = self;
         let mut worker_handle = worker_handle;
         // Drop the caller-facing receiver before asking the worker to shut
@@ -2106,6 +2126,10 @@ mod tests {
 
     #[tokio::test]
     async fn next_event_surfaces_lagged_markers() {
+        let codex_home = TempDir::new().expect("temp dir");
+        let config = build_test_config_for_codex_home(codex_home.path()).await;
+        let auth_manager =
+            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
         let (command_tx, _command_rx) = mpsc::channel(1);
         let (event_tx, event_rx) = mpsc::channel(1);
         let worker_handle = tokio::spawn(async {});
@@ -2119,6 +2143,10 @@ mod tests {
             command_tx,
             event_rx,
             worker_handle,
+            referral_session: Arc::new(ReferralSession::from_auth_manager(
+                auth_manager,
+                config.chatgpt_base_url,
+            )),
         };
 
         let event = timeout(Duration::from_secs(2), client.next_event())

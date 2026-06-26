@@ -81,6 +81,9 @@ impl App {
                 return;
             }
             ServerNotification::AccountUpdated(notification) => {
+                if let Some(referral_session) = &self.referral_session {
+                    referral_session.sync_identity().await;
+                }
                 let has_codex_backend_auth = matches!(
                     notification.auth_mode,
                     Some(

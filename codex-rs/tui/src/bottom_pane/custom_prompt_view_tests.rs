@@ -74,6 +74,14 @@ fn delayed_enter_after_typing_submits() {
     assert!(view.is_complete());
 }
 
+#[test]
+fn reports_configured_view_id() {
+    let (view, _submitted_rx) = custom_prompt_view();
+    let view = view.with_view_id("custom-prompt");
+
+    assert_eq!(view.view_id(), Some("custom-prompt"));
+}
+
 fn custom_prompt_view() -> (CustomPromptView, Receiver<String>) {
     let (submitted, submitted_rx) = std::sync::mpsc::channel();
     let view = CustomPromptView::new(

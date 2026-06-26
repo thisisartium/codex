@@ -6,6 +6,13 @@ use uuid::Uuid;
 
 const TEST_OVERLAY_VIEW_ID: &str = "usage-test-overlay";
 
+fn expect_referral_offer_refresh(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) {
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RefreshReferralInviteOffer { .. })
+    );
+}
+
 #[tokio::test]
 async fn usage_command_opens_menu_when_reset_is_available_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -18,6 +25,7 @@ async fn usage_command_opens_menu_when_reset_is_available_snapshot() {
     ));
 
     chat.dispatch_command(SlashCommand::Usage);
+    expect_referral_offer_refresh(&mut rx);
 
     assert_chatwidget_snapshot!(
         "usage_command_menu",
@@ -39,6 +47,7 @@ async fn usage_command_disables_reset_after_cached_zero_snapshot() {
     ));
 
     chat.dispatch_command(SlashCommand::Usage);
+    expect_referral_offer_refresh(&mut rx);
 
     assert_chatwidget_snapshot!(
         "usage_command_menu_without_resets",
@@ -67,6 +76,7 @@ async fn usage_menu_refresh_enables_newly_available_reset() {
     ));
 
     chat.dispatch_command(SlashCommand::Usage);
+    expect_referral_offer_refresh(&mut rx);
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::RefreshRateLimits {
@@ -96,6 +106,7 @@ async fn usage_menu_refresh_failure_preserves_disabled_known_zero() {
     ));
 
     chat.dispatch_command(SlashCommand::Usage);
+    expect_referral_offer_refresh(&mut rx);
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::RefreshRateLimits {
@@ -125,6 +136,7 @@ async fn account_update_invalidates_usage_menu_refresh_when_visible_state_is_unc
         Ok(RateLimitResetCreditsSummary { available_count: 0 }),
     ));
     chat.dispatch_command(SlashCommand::Usage);
+    expect_referral_offer_refresh(&mut rx);
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::RefreshRateLimits {
@@ -154,6 +166,7 @@ async fn usage_command_can_check_reset_availability_before_startup_refresh_finis
     chat.start_rate_limit_reset_startup_check();
 
     chat.dispatch_command(SlashCommand::Usage);
+    expect_referral_offer_refresh(&mut rx);
 
     assert_chatwidget_snapshot!(
         "usage_command_menu_before_reset_refresh",
@@ -171,6 +184,7 @@ async fn usage_command_can_check_reset_availability_for_workspace_accounts() {
     chat.plan_type = Some(PlanType::Business);
 
     chat.dispatch_command(SlashCommand::Usage);
+    expect_referral_offer_refresh(&mut rx);
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -188,6 +202,7 @@ async fn usage_menu_rate_limit_reset_entry_opens_reset_flow() {
         Ok(RateLimitResetCreditsSummary { available_count: 2 }),
     ));
     chat.dispatch_command(SlashCommand::Usage);
+    expect_referral_offer_refresh(&mut rx);
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -405,6 +420,7 @@ async fn no_credit_outcome_disables_reset_entry_in_usage_menu() {
     dismiss_popup(&mut chat);
 
     chat.dispatch_command(SlashCommand::Usage);
+    expect_referral_offer_refresh(&mut rx);
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::RefreshRateLimits {
