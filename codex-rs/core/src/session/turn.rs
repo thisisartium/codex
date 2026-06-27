@@ -101,7 +101,9 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::PlanDeltaEvent;
 use codex_protocol::protocol::ReasoningContentDeltaEvent;
 use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SafetyBufferingEvent;
+use codex_protocol::protocol::SamplingBoundaryEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
@@ -274,6 +276,11 @@ pub(crate) async fn run_turn(
                     .for_prompt(&turn_context.model_info.input_modalities)
             }
             .instrument(trace_span!("run_turn.prepare_sampling_request_input"))
+            .await;
+            sess.persist_rollout_items(&[RolloutItem::SamplingBoundary(SamplingBoundaryEvent {
+                turn_id: turn_context.sub_id.clone(),
+                window_id: window_id.clone(),
+            })])
             .await;
 
             let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(

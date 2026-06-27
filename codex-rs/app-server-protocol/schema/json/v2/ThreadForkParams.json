@@ -71,6 +71,13 @@
       ],
       "type": "string"
     },
+    "ThreadForkActiveMode": {
+      "enum": [
+        "interrupt",
+        "nonInterrupting"
+      ],
+      "type": "string"
+    },
     "ThreadSource": {
       "type": "string"
     }

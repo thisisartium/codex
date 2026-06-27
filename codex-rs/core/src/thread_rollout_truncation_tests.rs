@@ -5,6 +5,7 @@ use codex_protocol::AgentPath;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::SamplingBoundaryEvent;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -87,6 +88,13 @@ fn turn_completed(turn_id: &str) -> RolloutItem {
         duration_ms: None,
         time_to_first_token_ms: None,
     }))
+}
+
+fn sampling_boundary(turn_id: &str, window_id: &str) -> RolloutItem {
+    RolloutItem::SamplingBoundary(SamplingBoundaryEvent {
+        turn_id: turn_id.to_string(),
+        window_id: window_id.to_string(),
+    })
 }
 
 #[test]
@@ -441,6 +449,39 @@ fn fork_turn_positions_ignore_zero_turn_rollback_markers() {
     ];
 
     assert_eq!(fork_turn_positions_in_rollout(&rollout), vec![0, 1, 3]);
+}
+
+#[test]
+fn sampling_boundary_positions_apply_thread_rollback_markers() {
+    let rollout = vec![
+        RolloutItem::ResponseItem(user_msg("u1")),
+        RolloutItem::ResponseItem(assistant_msg("a1")),
+        turn_started("turn-2"),
+        RolloutItem::ResponseItem(user_msg("u2")),
+        sampling_boundary("turn-2", "window-2"),
+        RolloutItem::ResponseItem(assistant_msg("partial")),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        })),
+        RolloutItem::ResponseItem(user_msg("u3")),
+        sampling_boundary("turn-3", "window-3"),
+    ];
+
+    assert_eq!(sampling_boundary_positions_in_rollout(&rollout), vec![8]);
+}
+
+#[test]
+fn sampling_boundary_positions_ignore_zero_turn_rollback_markers() {
+    let rollout = vec![
+        RolloutItem::ResponseItem(user_msg("u1")),
+        sampling_boundary("turn-1", "window-1"),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 0,
+        })),
+        RolloutItem::ResponseItem(assistant_msg("a1")),
+    ];
+
+    assert_eq!(sampling_boundary_positions_in_rollout(&rollout), vec![1]);
 }
 
 #[test]

@@ -20,6 +20,7 @@ use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::ResumedHistory;
+use codex_protocol::protocol::SamplingBoundaryEvent;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
@@ -111,6 +112,13 @@ fn contextual_user_interrupted_marker() -> ResponseItem {
 fn developer_interrupted_marker() -> ResponseItem {
     interrupted_turn_history_marker(InterruptedTurnHistoryMarker::Developer)
         .expect("developer interrupted marker should be enabled")
+}
+
+fn sampling_boundary(turn_id: &str, window_id: &str) -> RolloutItem {
+    RolloutItem::SamplingBoundary(SamplingBoundaryEvent {
+        turn_id: turn_id.to_string(),
+        window_id: window_id.to_string(),
+    })
 }
 
 #[test]
@@ -1876,5 +1884,194 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
             })
             .count(),
         1,
+    );
+}
+
+#[tokio::test]
+async fn non_interrupting_fork_snapshot_uses_stable_boundaries_and_fails_closed() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let state_db = init_state_db(&config).await;
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, state_db.clone()),
+        local_agent_graph_store_from_state_db(state_db.as_ref()),
+        TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
+    );
+
+    let marked_source_items = vec![
+        RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-marked".to_string(),
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        })),
+        RolloutItem::ResponseItem(user_msg("marked user")),
+        sampling_boundary("turn-marked", "window-marked"),
+        RolloutItem::ResponseItem(assistant_msg("partial after boundary")),
+    ];
+    let marked_source = manager
+        .resume_thread_with_history(
+            config.clone(),
+            InitialHistory::Forked(marked_source_items.clone()),
+            auth_manager.clone(),
+            /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
+        )
+        .await
+        .expect("create marked source thread");
+    let marked_source_path = marked_source
+        .thread
+        .rollout_path()
+        .expect("marked source rollout path should exist");
+
+    let marked_fork = manager
+        .fork_thread(
+            ForkSnapshot::NonInterrupting,
+            config.clone(),
+            marked_source_path,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("fork marked source without interrupting");
+    let marked_fork_path = marked_fork
+        .thread
+        .rollout_path()
+        .expect("marked fork rollout path should exist");
+    let marked_fork_history = RolloutRecorder::get_rollout_history(&marked_fork_path)
+        .await
+        .expect("read marked fork rollout");
+    let marked_fork_items: Vec<_> = marked_fork_history
+        .get_rollout_items()
+        .iter()
+        .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
+        .cloned()
+        .collect();
+
+    assert_eq!(
+        serde_json::to_value(&marked_fork_items).expect("serialize marked fork"),
+        serde_json::to_value(&marked_source_items[..3]).expect("serialize expected marked fork")
+    );
+    assert!(!marked_fork_items.iter().any(|item| {
+        matches!(
+            item,
+            RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
+                reason: TurnAbortReason::Interrupted,
+                ..
+            }))
+        )
+    }));
+
+    let unmarked_source = manager
+        .resume_thread_with_history(
+            config.clone(),
+            InitialHistory::Forked(vec![
+                RolloutItem::ResponseItem(user_msg("unmarked user")),
+                RolloutItem::ResponseItem(assistant_msg("unmarked partial")),
+            ]),
+            auth_manager.clone(),
+            /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
+        )
+        .await
+        .expect("create unmarked source thread");
+    let unmarked_source_path = unmarked_source
+        .thread
+        .rollout_path()
+        .expect("unmarked source rollout path should exist");
+    let unmarked_before =
+        std::fs::read_to_string(&unmarked_source_path).expect("read unmarked source before fork");
+    let err = match manager
+        .fork_thread(
+            ForkSnapshot::NonInterrupting,
+            config.clone(),
+            unmarked_source_path.clone(),
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
+        )
+        .await
+    {
+        Ok(_) => panic!("unmarked active source should fail closed"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(err, CodexErr::InvalidRequest(message) if message.contains("no stable sampling boundary"))
+    );
+    let unmarked_after =
+        std::fs::read_to_string(&unmarked_source_path).expect("read unmarked source after fork");
+    assert_eq!(unmarked_after, unmarked_before);
+
+    let inactive_source_items = vec![
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
+            message: "inactive user".to_string(),
+            images: None,
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+            ..Default::default()
+        })),
+        RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+            message: "inactive done".to_string(),
+            phase: None,
+            memory_citation: None,
+        })),
+    ];
+    let inactive_source = manager
+        .resume_thread_with_history(
+            config.clone(),
+            InitialHistory::Forked(inactive_source_items.clone()),
+            auth_manager,
+            /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
+        )
+        .await
+        .expect("create inactive source thread");
+    let inactive_source_path = inactive_source
+        .thread
+        .rollout_path()
+        .expect("inactive source rollout path should exist");
+    let inactive_fork = manager
+        .fork_thread(
+            ForkSnapshot::NonInterrupting,
+            config,
+            inactive_source_path,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("fork inactive source without boundary");
+    let inactive_fork_path = inactive_fork
+        .thread
+        .rollout_path()
+        .expect("inactive fork rollout path should exist");
+    let inactive_fork_history = RolloutRecorder::get_rollout_history(&inactive_fork_path)
+        .await
+        .expect("read inactive fork rollout");
+    let inactive_fork_items: Vec<_> = inactive_fork_history
+        .get_rollout_items()
+        .iter()
+        .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
+        .cloned()
+        .collect();
+
+    assert_eq!(
+        serde_json::to_value(&inactive_fork_items).expect("serialize inactive fork"),
+        serde_json::to_value(&inactive_source_items).expect("serialize expected inactive fork")
     );
 }

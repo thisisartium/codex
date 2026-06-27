@@ -125,6 +125,50 @@ pub(crate) fn fork_turn_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize
     fork_turn_positions
 }
 
+/// Return the indices of effective prompt sampling boundaries in a rollout.
+///
+/// Sampling-boundary markers belong to the turn whose prompt input was sampled.
+/// If a later `ThreadRolledBack` marker removes that turn, any sampling
+/// boundaries inside the removed suffix are no longer effective fork targets.
+pub(crate) fn sampling_boundary_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize> {
+    let mut rollback_turn_positions = Vec::new();
+    let mut boundary_positions = Vec::new();
+    for (idx, item) in items.iter().enumerate() {
+        match item {
+            RolloutItem::ResponseItem(item)
+                if is_user_turn_boundary(item) => {
+                    rollback_turn_positions.push(idx);
+                }
+            RolloutItem::InterAgentCommunication(_)
+            | RolloutItem::InterAgentCommunicationMetadata { .. } => {
+                rollback_turn_positions.push(idx);
+            }
+            RolloutItem::SamplingBoundary(_) => {
+                boundary_positions.push(idx);
+            }
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
+                if num_turns == 0 {
+                    continue;
+                }
+                let Some(rollback_start_idx) = rollback_turn_positions
+                    .len()
+                    .checked_sub(num_turns)
+                    .map(|rollback_start| rollback_turn_positions[rollback_start])
+                    .or_else(|| rollback_turn_positions.first().copied())
+                else {
+                    continue;
+                };
+                let new_rollback_len = rollback_turn_positions.len().saturating_sub(num_turns);
+                rollback_turn_positions.truncate(new_rollback_len);
+                boundary_positions.retain(|position| *position < rollback_start_idx);
+            }
+            _ => {}
+        }
+    }
+    boundary_positions
+}
+
 /// Return a prefix of `items` obtained by cutting strictly before the nth user message.
 ///
 /// The boundary index is 0-based from the start of `items` (so `n_from_start = 0` returns
