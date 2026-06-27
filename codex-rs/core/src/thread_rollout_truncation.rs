@@ -76,14 +76,9 @@ pub(crate) fn fork_turn_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize
     for (idx, item) in items.iter().enumerate() {
         match item {
             RolloutItem::ResponseItem(item) => {
-                let has_delivery_metadata = matches!(item, ResponseItem::AgentMessage { .. })
-                    && idx.checked_sub(1).is_some_and(|previous_idx| {
-                        matches!(
-                            items.get(previous_idx),
-                            Some(RolloutItem::InterAgentCommunicationMetadata { .. })
-                        )
-                    });
-                if is_user_turn_boundary(item) && !has_delivery_metadata {
+                if is_user_turn_boundary(item)
+                    && !response_item_has_delivery_metadata(items, idx, item)
+                {
                     rollback_turn_positions.push(idx);
                 }
                 if is_real_user_message_boundary(item) || is_trigger_turn_boundary(item) {
@@ -136,9 +131,11 @@ pub(crate) fn sampling_boundary_positions_in_rollout(items: &[RolloutItem]) -> V
     for (idx, item) in items.iter().enumerate() {
         match item {
             RolloutItem::ResponseItem(item)
-                if is_user_turn_boundary(item) => {
-                    rollback_turn_positions.push(idx);
-                }
+                if is_user_turn_boundary(item)
+                    && !response_item_has_delivery_metadata(items, idx, item) =>
+            {
+                rollback_turn_positions.push(idx);
+            }
             RolloutItem::InterAgentCommunication(_)
             | RolloutItem::InterAgentCommunicationMetadata { .. } => {
                 rollback_turn_positions.push(idx);
@@ -167,6 +164,20 @@ pub(crate) fn sampling_boundary_positions_in_rollout(items: &[RolloutItem]) -> V
         }
     }
     boundary_positions
+}
+
+fn response_item_has_delivery_metadata(
+    items: &[RolloutItem],
+    idx: usize,
+    item: &ResponseItem,
+) -> bool {
+    matches!(item, ResponseItem::AgentMessage { .. })
+        && idx.checked_sub(1).is_some_and(|previous_idx| {
+            matches!(
+                items.get(previous_idx),
+                Some(RolloutItem::InterAgentCommunicationMetadata { .. })
+            )
+        })
 }
 
 /// Return a prefix of `items` obtained by cutting strictly before the nth user message.

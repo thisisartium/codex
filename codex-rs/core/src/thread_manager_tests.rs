@@ -25,6 +25,7 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_utils_path_uri::PathUri;
@@ -1966,8 +1967,21 @@ async fn non_interrupting_fork_snapshot_uses_stable_boundaries_and_fails_closed(
 
     assert_eq!(
         serde_json::to_value(&marked_fork_items).expect("serialize marked fork"),
-        serde_json::to_value(&marked_source_items[..3]).expect("serialize expected marked fork")
+        serde_json::to_value(vec![
+            marked_source_items[0].clone(),
+            marked_source_items[1].clone(),
+            marked_source_items[2].clone(),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-marked".to_string(),
+                last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            })),
+        ])
+        .expect("serialize expected marked fork")
     );
+    assert!(!snapshot_turn_state(&InitialHistory::Forked(marked_fork_items.clone())).ends_mid_turn);
     assert!(!marked_fork_items.iter().any(|item| {
         matches!(
             item,
@@ -1977,6 +1991,64 @@ async fn non_interrupting_fork_snapshot_uses_stable_boundaries_and_fails_closed(
             }))
         )
     }));
+
+    let active_without_boundary_source = manager
+        .resume_thread_with_history(
+            config.clone(),
+            InitialHistory::Forked(vec![
+                RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                    turn_id: "turn-completed".to_string(),
+                    trace_id: None,
+                    started_at: None,
+                    model_context_window: None,
+                    collaboration_mode_kind: Default::default(),
+                })),
+                RolloutItem::ResponseItem(user_msg("completed user")),
+                sampling_boundary("turn-completed", "window-completed"),
+                RolloutItem::ResponseItem(assistant_msg("completed assistant")),
+                RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                    turn_id: "turn-completed".to_string(),
+                    last_agent_message: None,
+                    completed_at: None,
+                    duration_ms: None,
+                    time_to_first_token_ms: None,
+                })),
+                RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                    turn_id: "turn-active".to_string(),
+                    trace_id: None,
+                    started_at: None,
+                    model_context_window: None,
+                    collaboration_mode_kind: Default::default(),
+                })),
+                RolloutItem::ResponseItem(user_msg("active user")),
+                RolloutItem::ResponseItem(assistant_msg("active partial")),
+            ]),
+            auth_manager.clone(),
+            /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
+        )
+        .await
+        .expect("create active source without boundary");
+    let active_without_boundary_path = active_without_boundary_source
+        .thread
+        .rollout_path()
+        .expect("active source rollout path should exist");
+    let err = match manager
+        .fork_thread(
+            ForkSnapshot::NonInterrupting,
+            config.clone(),
+            active_without_boundary_path,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
+        )
+        .await
+    {
+        Ok(_) => panic!("active source without active-turn boundary should fail closed"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(err, CodexErr::InvalidRequest(message) if message.contains("no stable sampling boundary"))
+    );
 
     let unmarked_source = manager
         .resume_thread_with_history(

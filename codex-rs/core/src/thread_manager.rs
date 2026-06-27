@@ -60,6 +60,7 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::state_db::StateDbHandle;
@@ -1912,18 +1913,35 @@ fn truncate_to_last_sampling_boundary(
     }
 
     let items = history.get_rollout_items();
+    let Some(active_turn_start_index) = snapshot_state.active_turn_start_index else {
+        return Err(CodexErr::InvalidRequest(
+            "cannot fork active thread without interrupting: no stable sampling boundary is available"
+                .to_string(),
+        ));
+    };
     let Some(last_boundary_position) = truncation::sampling_boundary_positions_in_rollout(items)
-        .last()
-        .copied()
+        .into_iter()
+        .rev()
+        .find(|position| *position >= active_turn_start_index)
     else {
         return Err(CodexErr::InvalidRequest(
             "cannot fork active thread without interrupting: no stable sampling boundary is available"
                 .to_string(),
         ));
     };
-    Ok(InitialHistory::Forked(
-        items[..=last_boundary_position].to_vec(),
-    ))
+    let mut selected = items[..=last_boundary_position].to_vec();
+    if let Some(turn_id) = snapshot_state.active_turn_id.clone() {
+        selected.push(RolloutItem::EventMsg(EventMsg::TurnComplete(
+            TurnCompleteEvent {
+                turn_id,
+                last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            },
+        )));
+    }
+    Ok(InitialHistory::Forked(selected))
 }
 
 /// Append the same persisted interrupt boundary used by the live interrupt path

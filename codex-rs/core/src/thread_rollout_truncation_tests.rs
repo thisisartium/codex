@@ -471,6 +471,31 @@ fn sampling_boundary_positions_apply_thread_rollback_markers() {
 }
 
 #[test]
+fn sampling_boundary_positions_do_not_double_count_inter_agent_metadata_delivery_pair() {
+    let triggered = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::try_from("/root/worker").expect("agent path"),
+        Vec::new(),
+        "triggered task".to_string(),
+        /*trigger_turn*/ true,
+    );
+    let rollout = vec![
+        RolloutItem::ResponseItem(user_msg("u1")),
+        sampling_boundary("turn-1", "window-1"),
+        RolloutItem::InterAgentCommunicationMetadata { trigger_turn: true },
+        RolloutItem::ResponseItem(triggered.to_model_input_item()),
+        sampling_boundary("inter-agent-turn", "window-2"),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 2,
+        })),
+        RolloutItem::ResponseItem(user_msg("u3")),
+        sampling_boundary("turn-3", "window-3"),
+    ];
+
+    assert_eq!(sampling_boundary_positions_in_rollout(&rollout), vec![7]);
+}
+
+#[test]
 fn sampling_boundary_positions_ignore_zero_turn_rollback_markers() {
     let rollout = vec![
         RolloutItem::ResponseItem(user_msg("u1")),

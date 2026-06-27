@@ -3647,7 +3647,7 @@ impl ThreadRequestProcessor {
         // instead of rebuilding history only to attribute a historical update.
         if let Some(token_usage_thread) = token_usage_thread {
             let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
-                &history_items,
+                &fork_history_items,
                 token_usage_thread.turns.as_slice(),
             );
             // Mirror the resume contract for forks: the new thread is usable as soon
