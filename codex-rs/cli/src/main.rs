@@ -3927,6 +3927,33 @@ mod tests {
     }
 
     #[test]
+    fn app_server_no_token_check_flag_parses() {
+        let app_server = app_server_from_args(["codex", "app-server", "--no-token-check"].as_ref());
+        assert!(app_server.auth.no_token_check);
+    }
+
+    #[test]
+    fn app_server_no_token_check_rejects_explicit_auth() {
+        let app_server = app_server_from_args(
+            [
+                "codex",
+                "app-server",
+                "--no-token-check",
+                "--ws-auth",
+                "capability-token",
+                "--ws-token-sha256",
+                "abababababababababababababababababababababababababababababababab",
+            ]
+            .as_ref(),
+        );
+        let err = app_server
+            .auth
+            .try_into_settings()
+            .expect_err("token-check bypass should not combine with explicit auth");
+        assert!(err.to_string().contains("cannot be combined"));
+    }
+
+    #[test]
     fn app_server_signed_bearer_flags_parse() {
         let app_server = app_server_from_args(
             [

@@ -1,7 +1,10 @@
 use anyhow::Context;
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
+use axum::http::Uri;
 use axum::http::header::AUTHORIZATION;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use clap::Args;
 use clap::ValueEnum;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -10,6 +13,8 @@ use jsonwebtoken::Algorithm;
 use jsonwebtoken::DecodingKey;
 use jsonwebtoken::Validation;
 use jsonwebtoken::decode;
+use rand::TryRngCore;
+use rand::rngs::OsRng;
 use serde::Deserialize;
 use sha2::Digest;
 use sha2::Sha256;
@@ -21,6 +26,7 @@ use std::path::PathBuf;
 use time::OffsetDateTime;
 
 const DEFAULT_MAX_CLOCK_SKEW_SECONDS: u64 = 30;
+const GENERATED_QUERY_TOKEN_BYTES: usize = 32;
 const MIN_SIGNED_BEARER_SECRET_BYTES: usize = 32;
 const INVALID_AUTHORIZATION_HEADER_MESSAGE: &str = "invalid authorization header";
 
@@ -53,6 +59,13 @@ pub struct AppServerWebsocketAuthArgs {
     /// Maximum clock skew when validating signed JWT bearer tokens.
     #[arg(long = "ws-max-clock-skew-seconds", value_name = "SECONDS")]
     pub ws_max_clock_skew_seconds: Option<u64>,
+
+    /// Accept websocket clients without the generated query token.
+    ///
+    /// A token is still generated and printed. Missing or incorrect tokens are
+    /// accepted with a warning for each connection.
+    #[arg(long = "no-token-check", default_value_t = false)]
+    pub no_token_check: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -64,6 +77,7 @@ pub enum WebsocketAuthCliMode {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppServerWebsocketAuthSettings {
     pub config: Option<AppServerWebsocketAuthConfig>,
+    pub no_token_check: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,17 +99,22 @@ pub enum AppServerWebsocketCapabilityTokenSource {
     TokenSha256 { token_sha256: [u8; 32] },
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct WebsocketAuthPolicy {
     pub(crate) mode: Option<WebsocketAuthMode>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) enum WebsocketAuthMode {
-    CapabilityToken {
+    GeneratedQuery {
+        token: String,
+        token_sha256: [u8; 32],
+        enforce: bool,
+    },
+    Capability {
         token_sha256: [u8; 32],
     },
-    SignedBearerToken {
+    SignedBearer {
         shared_secret: Vec<u8>,
         issuer: Option<String>,
         audience: Option<String>,
@@ -107,6 +126,12 @@ pub(crate) enum WebsocketAuthMode {
 pub(crate) struct WebsocketAuthError {
     status_code: StatusCode,
     message: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WebsocketAuthorization {
+    Authorized,
+    AllowedWithoutValidGeneratedToken { reason: &'static str },
 }
 
 #[derive(Deserialize)]
@@ -136,6 +161,11 @@ impl WebsocketAuthError {
 
 impl AppServerWebsocketAuthArgs {
     pub fn try_into_settings(self) -> anyhow::Result<AppServerWebsocketAuthSettings> {
+        if self.no_token_check && self.ws_auth.is_some() {
+            anyhow::bail!(
+                "`--no-token-check` cannot be combined with an explicit `--ws-auth` mode"
+            );
+        }
         let normalize = |value: Option<String>| {
             value.and_then(|value| {
                 let trimmed = value.trim();
@@ -215,7 +245,10 @@ impl AppServerWebsocketAuthArgs {
             }
         };
 
-        Ok(AppServerWebsocketAuthSettings { config })
+        Ok(AppServerWebsocketAuthSettings {
+            config,
+            no_token_check: self.no_token_check,
+        })
     }
 }
 
@@ -226,12 +259,12 @@ pub fn policy_from_settings(
         Some(AppServerWebsocketAuthConfig::CapabilityToken { source }) => match source {
             AppServerWebsocketCapabilityTokenSource::TokenFile { token_file } => {
                 let token = read_trimmed_secret(token_file.as_ref())?;
-                Some(WebsocketAuthMode::CapabilityToken {
+                Some(WebsocketAuthMode::Capability {
                     token_sha256: sha256_digest(token.as_bytes()),
                 })
             }
             AppServerWebsocketCapabilityTokenSource::TokenSha256 { token_sha256 } => {
-                Some(WebsocketAuthMode::CapabilityToken {
+                Some(WebsocketAuthMode::Capability {
                     token_sha256: *token_sha256,
                 })
             }
@@ -250,14 +283,21 @@ pub fn policy_from_settings(
                     "websocket auth clock skew must fit in a signed 64-bit integer",
                 )
             })?;
-            Some(WebsocketAuthMode::SignedBearerToken {
+            Some(WebsocketAuthMode::SignedBearer {
                 shared_secret,
                 issuer: issuer.clone(),
                 audience: audience.clone(),
                 max_clock_skew_seconds,
             })
         }
-        None => None,
+        None => {
+            let token = generate_query_token()?;
+            Some(WebsocketAuthMode::GeneratedQuery {
+                token_sha256: sha256_digest(token.as_bytes()),
+                token,
+                enforce: !settings.no_token_check,
+            })
+        }
     };
 
     Ok(WebsocketAuthPolicy { mode })
@@ -271,36 +311,108 @@ pub(crate) fn is_unauthenticated_non_loopback_listener(
 }
 
 pub(crate) fn authorize_upgrade(
+    uri: &Uri,
     headers: &HeaderMap,
     policy: &WebsocketAuthPolicy,
-) -> Result<(), WebsocketAuthError> {
+) -> Result<WebsocketAuthorization, WebsocketAuthError> {
     let Some(mode) = policy.mode.as_ref() else {
-        return Ok(());
+        return Ok(WebsocketAuthorization::Authorized);
     };
 
-    let token = bearer_token_from_headers(headers)?;
     match mode {
-        WebsocketAuthMode::CapabilityToken { token_sha256 } => {
+        WebsocketAuthMode::GeneratedQuery {
+            token_sha256,
+            enforce,
+            ..
+        } => {
+            let query_token = match query_token_from_uri(uri) {
+                Ok(query_token) => query_token,
+                Err(reason) if !enforce => {
+                    return Ok(WebsocketAuthorization::AllowedWithoutValidGeneratedToken {
+                        reason,
+                    });
+                }
+                Err(reason) => return Err(unauthorized(reason)),
+            };
+            let token_matches = query_token
+                .as_deref()
+                .map(|token| constant_time_eq_32(token_sha256, &sha256_digest(token.as_bytes())))
+                .unwrap_or(false);
+            if token_matches {
+                return Ok(WebsocketAuthorization::Authorized);
+            }
+            let reason = if query_token.is_some() {
+                "invalid generated websocket query token"
+            } else {
+                "missing generated websocket query token"
+            };
+            if *enforce {
+                Err(unauthorized(reason))
+            } else {
+                Ok(WebsocketAuthorization::AllowedWithoutValidGeneratedToken { reason })
+            }
+        }
+        WebsocketAuthMode::Capability { token_sha256 } => {
+            let token = bearer_token_from_headers(headers)?;
             let actual_sha256 = sha256_digest(token.as_bytes());
             if constant_time_eq_32(token_sha256, &actual_sha256) {
-                Ok(())
+                Ok(WebsocketAuthorization::Authorized)
             } else {
                 Err(unauthorized("invalid websocket bearer token"))
             }
         }
-        WebsocketAuthMode::SignedBearerToken {
+        WebsocketAuthMode::SignedBearer {
             shared_secret,
             issuer,
             audience,
             max_clock_skew_seconds,
-        } => verify_signed_bearer_token(
-            token,
-            shared_secret,
-            issuer.as_deref(),
-            audience.as_deref(),
-            *max_clock_skew_seconds,
-        ),
+        } => {
+            let token = bearer_token_from_headers(headers)?;
+            verify_signed_bearer_token(
+                token,
+                shared_secret,
+                issuer.as_deref(),
+                audience.as_deref(),
+                *max_clock_skew_seconds,
+            )?;
+            Ok(WebsocketAuthorization::Authorized)
+        }
     }
+}
+
+impl WebsocketAuthPolicy {
+    pub(crate) fn generated_query_token(&self) -> Option<&str> {
+        match self.mode.as_ref() {
+            Some(WebsocketAuthMode::GeneratedQuery { token, .. }) => Some(token),
+            Some(WebsocketAuthMode::Capability { .. } | WebsocketAuthMode::SignedBearer { .. })
+            | None => None,
+        }
+    }
+}
+
+fn generate_query_token() -> io::Result<String> {
+    let mut bytes = [0_u8; GENERATED_QUERY_TOKEN_BYTES];
+    let mut rng = OsRng;
+    rng.try_fill_bytes(&mut bytes)
+        .map_err(|err| io::Error::other(format!("failed to generate websocket token: {err}")))?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
+fn query_token_from_uri(uri: &Uri) -> Result<Option<String>, &'static str> {
+    let Some(query) = uri.query() else {
+        return Ok(None);
+    };
+    let mut token = None;
+    for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        if key != "token" {
+            continue;
+        }
+        if token.is_some() {
+            return Err("multiple websocket query tokens");
+        }
+        token = Some(value.into_owned());
+    }
+    Ok(token)
 }
 
 fn verify_signed_bearer_token(
@@ -495,7 +607,7 @@ mod tests {
         assert!(!is_unauthenticated_non_loopback_listener(
             "0.0.0.0:8765".parse().unwrap(),
             &WebsocketAuthPolicy {
-                mode: Some(WebsocketAuthMode::CapabilityToken {
+                mode: Some(WebsocketAuthMode::Capability {
                     token_sha256: [0u8; 32],
                 }),
             },
@@ -535,6 +647,7 @@ mod tests {
                         token_sha256: [0xab; 32],
                     },
                 }),
+                no_token_check: false,
             }
         );
     }
@@ -578,21 +691,104 @@ mod tests {
                     token_sha256: sha256_digest(b"super-secret-token"),
                 },
             }),
+            no_token_check: false,
         };
         let policy = policy_from_settings(&settings).expect("hash policy should build");
+        let uri = Uri::from_static("/");
         let mut headers = HeaderMap::new();
         headers.insert(
             AUTHORIZATION,
             HeaderValue::from_static("Bearer super-secret-token"),
         );
-        authorize_upgrade(&headers, &policy).expect("matching token should authorize");
+        assert_eq!(
+            authorize_upgrade(&uri, &headers, &policy).expect("matching token should authorize"),
+            WebsocketAuthorization::Authorized
+        );
 
         headers.insert(
             AUTHORIZATION,
             HeaderValue::from_static("Bearer wrong-token"),
         );
-        let err = authorize_upgrade(&headers, &policy).expect_err("wrong token should fail");
+        let err = authorize_upgrade(&uri, &headers, &policy).expect_err("wrong token should fail");
         assert_eq!(err.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn generated_query_token_is_required_by_default() {
+        let policy = policy_from_settings(&AppServerWebsocketAuthSettings::default())
+            .expect("generated token policy should build");
+        let token = policy
+            .generated_query_token()
+            .expect("generated policy should expose its token");
+        assert_eq!(token.len(), 43);
+
+        let valid_uri: Uri = format!("/?token={token}").parse().expect("valid token URI");
+        assert_eq!(
+            authorize_upgrade(&valid_uri, &HeaderMap::new(), &policy)
+                .expect("matching query token should authorize"),
+            WebsocketAuthorization::Authorized
+        );
+
+        for uri in [
+            Uri::from_static("/"),
+            Uri::from_static("/?token=wrong"),
+            Uri::from_static("/?token=one&token=two"),
+        ] {
+            let err = authorize_upgrade(&uri, &HeaderMap::new(), &policy)
+                .expect_err("missing or invalid query token should fail");
+            assert_eq!(err.status_code(), StatusCode::UNAUTHORIZED);
+        }
+    }
+
+    #[test]
+    fn no_token_check_allows_invalid_tokens_with_warning_outcomes() {
+        let policy = policy_from_settings(&AppServerWebsocketAuthSettings {
+            no_token_check: true,
+            ..Default::default()
+        })
+        .expect("generated token policy should build");
+
+        assert_eq!(
+            authorize_upgrade(&Uri::from_static("/"), &HeaderMap::new(), &policy)
+                .expect("missing token should be allowed"),
+            WebsocketAuthorization::AllowedWithoutValidGeneratedToken {
+                reason: "missing generated websocket query token"
+            }
+        );
+        assert_eq!(
+            authorize_upgrade(
+                &Uri::from_static("/?token=wrong"),
+                &HeaderMap::new(),
+                &policy,
+            )
+            .expect("wrong token should be allowed"),
+            WebsocketAuthorization::AllowedWithoutValidGeneratedToken {
+                reason: "invalid generated websocket query token"
+            }
+        );
+        assert_eq!(
+            authorize_upgrade(
+                &Uri::from_static("/?token=one&token=two"),
+                &HeaderMap::new(),
+                &policy,
+            )
+            .expect("multiple tokens should be allowed"),
+            WebsocketAuthorization::AllowedWithoutValidGeneratedToken {
+                reason: "multiple websocket query tokens"
+            }
+        );
+    }
+
+    #[test]
+    fn no_token_check_rejects_explicit_auth_mode() {
+        let err = AppServerWebsocketAuthArgs {
+            ws_auth: Some(WebsocketAuthCliMode::CapabilityToken),
+            no_token_check: true,
+            ..Default::default()
+        }
+        .try_into_settings()
+        .expect_err("token-check bypass should not combine with explicit auth");
+        assert!(err.to_string().contains("cannot be combined"));
     }
 
     #[test]
@@ -631,6 +827,7 @@ mod tests {
                     audience: None,
                     max_clock_skew_seconds: DEFAULT_MAX_CLOCK_SKEW_SECONDS,
                 }),
+                no_token_check: false,
             }
         );
     }

@@ -35,3 +35,16 @@ fn app_server_accepts_cli_config_overrides() {
         ]
     );
 }
+
+#[test]
+fn app_server_accepts_no_token_check() {
+    let args = AppServerArgs::try_parse_from([
+        "codex-app-server",
+        "--listen",
+        "ws://127.0.0.1:4500",
+        "--no-token-check",
+    ])
+    .expect("parse app-server args");
+
+    assert!(args.auth.no_token_check);
+}

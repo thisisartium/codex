@@ -34,6 +34,22 @@ When running with `--listen ws://IP:PORT`, the same listener also serves basic H
 - `GET /healthz` returns `200 OK` when no `Origin` header is present.
 - Any request carrying an `Origin` header is rejected with `403 Forbidden`.
 
+By default, app-server generates a 256-bit connection token for websocket listeners and prints the
+complete connection URL to stderr, for example:
+
+```text
+ws://127.0.0.1:4500/?token=<generated-token>
+```
+
+Clients must provide that exact `token` query parameter during the websocket upgrade. Treat the
+printed URL as a secret. Pass `--no-token-check` to accept clients that omit the token or provide an
+incorrect token; app-server still prints the tokenized URL and logs a warning for every connection
+accepted without the correct token.
+
+The existing `--ws-auth capability-token` and `--ws-auth signed-bearer-token` modes replace the
+generated query-token mode and continue to require `Authorization: Bearer <token>` during upgrade.
+`--no-token-check` cannot be combined with an explicit `--ws-auth` mode.
+
 Websocket transport is currently experimental and unsupported. Do not rely on it for production workloads.
 
 The unix socket transport is intended for local app-server control-plane clients. `codex app-server proxy`

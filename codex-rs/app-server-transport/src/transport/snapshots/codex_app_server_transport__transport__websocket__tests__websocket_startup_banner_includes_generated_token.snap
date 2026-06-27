@@ -1,0 +1,10 @@
+---
+source: app-server-transport/src/transport/websocket_tests.rs
+assertion_line: 15
+expression: banner
+---
+codex app-server (WebSockets)
+  listening on: ws://127.0.0.1:4500/?token=<generated-token>
+  readyz: http://127.0.0.1:4500/readyz
+  healthz: http://127.0.0.1:4500/healthz
+  note: binds localhost only (use SSH port-forwarding for remote access)

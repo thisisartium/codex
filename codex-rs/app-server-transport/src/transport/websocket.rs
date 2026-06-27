@@ -2,6 +2,7 @@ use super::CHANNEL_CAPACITY;
 use super::ConnectionOrigin;
 use super::TransportEvent;
 use super::auth::WebsocketAuthPolicy;
+use super::auth::WebsocketAuthorization;
 use super::auth::authorize_upgrade;
 use super::auth::is_unauthenticated_non_loopback_listener;
 use super::forward_incoming_message;
@@ -19,6 +20,7 @@ use axum::extract::ws::WebSocketUpgrade;
 use axum::http::HeaderMap;
 use axum::http::Request;
 use axum::http::StatusCode;
+use axum::http::Uri;
 use axum::http::header::ORIGIN;
 use axum::middleware;
 use axum::middleware::Next;
@@ -53,27 +55,38 @@ fn colorize(text: &str, style: Style) -> String {
         .to_string()
 }
 
-#[allow(clippy::print_stderr)]
-fn print_websocket_startup_banner(addr: SocketAddr) {
+fn websocket_listen_url(addr: SocketAddr, auth_policy: &WebsocketAuthPolicy) -> String {
+    match auth_policy.generated_query_token() {
+        Some(token) => format!("ws://{addr}/?token={token}"),
+        None => format!("ws://{addr}"),
+    }
+}
+
+fn websocket_startup_banner(addr: SocketAddr, auth_policy: &WebsocketAuthPolicy) -> String {
     let title = colorize("codex app-server (WebSockets)", Style::new().bold().cyan());
     let listening_label = colorize("listening on:", Style::new().dimmed());
-    let listen_url = colorize(&format!("ws://{addr}"), Style::new().green());
+    let listen_url = colorize(
+        &websocket_listen_url(addr, auth_policy),
+        Style::new().green(),
+    );
     let ready_label = colorize("readyz:", Style::new().dimmed());
     let ready_url = colorize(&format!("http://{addr}/readyz"), Style::new().green());
     let health_label = colorize("healthz:", Style::new().dimmed());
     let health_url = colorize(&format!("http://{addr}/healthz"), Style::new().green());
     let note_label = colorize("note:", Style::new().dimmed());
-    eprintln!("{title}");
-    eprintln!("  {listening_label} {listen_url}");
-    eprintln!("  {ready_label} {ready_url}");
-    eprintln!("  {health_label} {health_url}");
-    if addr.ip().is_loopback() {
-        eprintln!(
-            "  {note_label} binds localhost only (use SSH port-forwarding for remote access)"
-        );
+    let note = if addr.ip().is_loopback() {
+        "binds localhost only (use SSH port-forwarding for remote access)"
     } else {
-        eprintln!("  {note_label} websocket auth is required for non-localhost listeners");
-    }
+        "websocket auth is required for non-localhost listeners"
+    };
+    format!(
+        "{title}\n  {listening_label} {listen_url}\n  {ready_label} {ready_url}\n  {health_label} {health_url}\n  {note_label} {note}"
+    )
+}
+
+#[allow(clippy::print_stderr)]
+fn print_websocket_startup_banner(addr: SocketAddr, auth_policy: &WebsocketAuthPolicy) {
+    eprintln!("{}", websocket_startup_banner(addr, auth_policy));
 }
 
 #[derive(Clone)]
@@ -93,7 +106,7 @@ async fn reject_requests_with_origin_header(
     if request.headers().contains_key(ORIGIN) {
         warn!(
             method = %request.method(),
-            uri = %request.uri(),
+            path = request.uri().path(),
             "rejecting websocket listener request with Origin header"
         );
         Err(StatusCode::FORBIDDEN)
@@ -106,15 +119,26 @@ async fn websocket_upgrade_handler(
     websocket: WebSocketUpgrade,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     State(state): State<WebSocketListenerState>,
+    uri: Uri,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Err(err) = authorize_upgrade(&headers, state.auth_policy.as_ref()) {
-        warn!(
-            %peer_addr,
-            message = err.message(),
-            "rejecting websocket client during upgrade"
-        );
-        return (err.status_code(), err.message()).into_response();
+    match authorize_upgrade(&uri, &headers, state.auth_policy.as_ref()) {
+        Ok(WebsocketAuthorization::Authorized) => {}
+        Ok(WebsocketAuthorization::AllowedWithoutValidGeneratedToken { reason }) => {
+            warn!(
+                %peer_addr,
+                reason,
+                "allowing websocket client without the generated token because --no-token-check is set"
+            );
+        }
+        Err(err) => {
+            warn!(
+                %peer_addr,
+                message = err.message(),
+                "rejecting websocket client during upgrade"
+            );
+            return (err.status_code(), err.message()).into_response();
+        }
     }
     info!(%peer_addr, "websocket client connected");
     websocket
@@ -142,7 +166,7 @@ pub async fn start_websocket_acceptor(
     }
     let listener = TcpListener::bind(bind_address).await?;
     let local_addr = listener.local_addr()?;
-    print_websocket_startup_banner(local_addr);
+    print_websocket_startup_banner(local_addr, &auth_policy);
     info!("app-server websocket listening on ws://{local_addr}");
 
     let router = Router::new()
@@ -168,6 +192,10 @@ pub async fn start_websocket_acceptor(
         info!("websocket acceptor shutting down");
     }))
 }
+
+#[cfg(test)]
+#[path = "websocket_tests.rs"]
+mod tests;
 
 pub(crate) async fn run_websocket_connection<M, SinkError, StreamError>(
     websocket_writer: impl futures::sink::Sink<M, Error = SinkError> + Send + 'static,
