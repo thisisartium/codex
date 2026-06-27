@@ -567,7 +567,7 @@ pub struct ThreadForkParams {
     /// `nonInterrupting` to fork from an existing stable source-owned sampling
     /// boundary without cancelling or mutating the source thread.
     #[experimental("thread/fork.activeForkMode")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     #[ts(optional = nullable)]
     pub active_fork_mode: Option<ThreadForkActiveMode>,
 }

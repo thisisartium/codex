@@ -871,6 +871,11 @@ fn thread_fork_last_turn_id_round_trips() {
         serde_json::Value::Null,
         "optional lastTurnId should serialize as null when omitted"
     );
+    assert_eq!(
+        omitted["activeForkMode"],
+        serde_json::Value::Null,
+        "optional activeForkMode should serialize as null when omitted"
+    );
 }
 
 #[test]
