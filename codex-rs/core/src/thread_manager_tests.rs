@@ -268,6 +268,23 @@ fn out_of_range_truncation_drops_only_unfinished_suffix_mid_turn() {
 }
 
 #[test]
+fn user_only_legacy_snapshot_is_not_mid_turn() {
+    let snapshot_state =
+        snapshot_turn_state(&InitialHistory::Forked(vec![RolloutItem::ResponseItem(
+            user_msg("saved user message"),
+        )]));
+
+    assert_eq!(
+        snapshot_state,
+        SnapshotTurnState {
+            ends_mid_turn: false,
+            active_turn_id: None,
+            active_turn_start_index: None,
+        },
+    );
+}
+
+#[test]
 fn fork_thread_accepts_legacy_usize_snapshot_argument() {
     fn assert_legacy_snapshot_callsite(
         manager: &ThreadManager,

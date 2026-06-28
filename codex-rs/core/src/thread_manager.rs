@@ -1848,15 +1848,18 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
     };
 
     // Synthetic fork/resume histories can contain user/assistant response items
-    // without explicit turn lifecycle events. If the persisted snapshot has no
-    // terminating boundary after its last user message, treat it as mid-turn.
+    // without explicit turn lifecycle events. If the persisted snapshot has a
+    // non-empty suffix after its last user message but no terminating boundary,
+    // treat it as mid-turn.
+    let suffix_after_last_user = &rollout_items[last_user_position + 1..];
     SnapshotTurnState {
-        ends_mid_turn: !rollout_items[last_user_position + 1..].iter().any(|item| {
-            matches!(
-                item,
-                RolloutItem::EventMsg(EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
-            )
-        }),
+        ends_mid_turn: !suffix_after_last_user.is_empty()
+            && !suffix_after_last_user.iter().any(|item| {
+                matches!(
+                    item,
+                    RolloutItem::EventMsg(EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
+                )
+            }),
         active_turn_id: None,
         active_turn_start_index: None,
     }
