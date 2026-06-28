@@ -1,0 +1,19 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 3928062..7dfb803 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -173,7 +173,13 @@ impl Project {
+ 
+         let shared_dir = match target::find_target_dir(&out_dir) {
+             TargetDir::Path(target_dir) => target_dir.join("cxxbridge"),
+-            TargetDir::Unknown => scratch::path("cxxbridge"),
++            TargetDir::Unknown => {
++                if env::var_os("CXX_BUILD_BAZEL_OUT_DIR_SHARED").is_some() {
++                    out_dir.join("cxxbridge-shared")
++                } else {
++                    scratch::path("cxxbridge")
++                }
++            }
+         };
+ 
+         Ok(Project {

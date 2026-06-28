@@ -3404,6 +3404,7 @@ impl ThreadRequestProcessor {
             ephemeral,
             thread_source,
             exclude_turns,
+            active_fork_mode,
         } = params;
         let include_turns = !exclude_turns;
         if sandbox.is_some() && permissions.is_some() {
@@ -3485,15 +3486,19 @@ impl ThreadRequestProcessor {
 
         let fallback_model_provider = config.model_provider_id.clone();
 
-        let NewThread {
-            thread_id,
-            thread: forked_thread,
-            session_configured,
-            ..
-        } = self
+        let fork_snapshot = match active_fork_mode
+            .unwrap_or(codex_app_server_protocol::ThreadForkActiveMode::Interrupt)
+        {
+            codex_app_server_protocol::ThreadForkActiveMode::Interrupt => ForkSnapshot::Interrupted,
+            codex_app_server_protocol::ThreadForkActiveMode::NonInterrupting => {
+                ForkSnapshot::NonInterrupting
+            }
+        };
+
+        let forked = self
             .thread_manager
-            .fork_thread_from_history(
-                ForkSnapshot::Interrupted,
+            .fork_thread_from_history_with_selection(
+                fork_snapshot,
                 config,
                 InitialHistory::Resumed(ResumedHistory {
                     conversation_id: source_thread_id,
@@ -3512,6 +3517,13 @@ impl ThreadRequestProcessor {
                 CodexErr::InvalidRequest(message) => invalid_request(message),
                 err => internal_error(format!("error forking thread: {err}")),
             })?;
+        let fork_history_items = forked.selected_history;
+        let NewThread {
+            thread_id,
+            thread: forked_thread,
+            session_configured,
+            ..
+        } = forked.new_thread;
 
         Self::set_app_server_client_info(
             forked_thread.as_ref(),
@@ -3569,12 +3581,12 @@ impl ThreadRequestProcessor {
                 &config_snapshot,
                 /*path*/ None,
             );
-            thread.preview = preview_from_rollout_items(&history_items);
+            thread.preview = preview_from_rollout_items(&fork_history_items);
             thread.forked_from_id = Some(source_thread_id.to_string());
             if include_turns {
                 populate_thread_turns_from_history(
                     &mut thread,
-                    &history_items,
+                    &fork_history_items,
                     /*active_turn*/ None,
                 );
             }
@@ -3635,7 +3647,7 @@ impl ThreadRequestProcessor {
         // instead of rebuilding history only to attribute a historical update.
         if let Some(token_usage_thread) = token_usage_thread {
             let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
-                &history_items,
+                &fork_history_items,
                 token_usage_thread.turns.as_slice(),
             );
             // Mirror the resume contract for forks: the new thread is usable as soon

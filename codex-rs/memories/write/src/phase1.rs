@@ -416,6 +416,7 @@ mod job {
                 | RolloutItem::Compacted(_)
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::WorldState(_)
+                | RolloutItem::SamplingBoundary(_)
                 | RolloutItem::EventMsg(_) => None,
             })
             .collect::<Vec<_>>();

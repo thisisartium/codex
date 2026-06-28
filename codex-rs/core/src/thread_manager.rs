@@ -60,6 +60,7 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::state_db::StateDbHandle;
@@ -125,15 +126,6 @@ pub struct NewThread {
     pub session_configured: SessionConfiguredEvent,
 }
 
-// TODO(ccunningham): Add an explicit non-interrupting live-turn snapshot once
-// core can represent sampling boundaries directly instead of relying on
-// whichever items happened to be persisted mid-turn.
-//
-// Two likely future variants:
-// - `TruncateToLastSamplingBoundary` for callers that want a coherent fork from
-//   the last stable model boundary without synthesizing an interrupt.
-// - `WaitUntilNextSamplingBoundary` (or similar) for callers that prefer to
-//   fork after the next sampling boundary rather than interrupting immediately.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ForkSnapshot {
     /// Fork a committed prefix ending strictly before the nth user message.
@@ -154,6 +146,18 @@ pub enum ForkSnapshot {
     /// already at a turn boundary, this returns the current persisted history
     /// unchanged.
     Interrupted,
+
+    /// Fork without interrupting the source thread.
+    ///
+    /// Mid-turn sources use the latest persisted sampling boundary. If no
+    /// boundary exists, this fails closed instead of falling back to an
+    /// interrupted snapshot.
+    NonInterrupting,
+}
+
+pub struct ForkedThread {
+    pub new_thread: NewThread,
+    pub selected_history: Vec<RolloutItem>,
 }
 
 /// Preserve legacy `fork_thread(usize, ...)` callsites by mapping them to the
@@ -738,7 +742,7 @@ impl ThreadManager {
                 &options.config,
                 inherited_multi_agent_version,
             ),
-        );
+        )?;
         self.start_thread_with_options_and_fork_source(options, Some(forked_from_thread_id))
             .await
     }
@@ -991,6 +995,31 @@ impl ThreadManager {
     where
         S: Into<ForkSnapshot>,
     {
+        Ok(self
+            .fork_thread_from_history_with_selection(
+                snapshot,
+                config,
+                history,
+                thread_source,
+                parent_trace,
+                supports_openai_form_elicitation,
+            )
+            .await?
+            .new_thread)
+    }
+
+    pub async fn fork_thread_from_history_with_selection<S>(
+        &self,
+        snapshot: S,
+        config: Config,
+        history: InitialHistory,
+        thread_source: Option<ThreadSource>,
+        parent_trace: Option<W3cTraceContext>,
+        supports_openai_form_elicitation: bool,
+    ) -> CodexResult<ForkedThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
         self.fork_thread_with_initial_history(
             snapshot.into(),
             config,
@@ -1010,7 +1039,7 @@ impl ThreadManager {
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
         supports_openai_form_elicitation: bool,
-    ) -> CodexResult<NewThread> {
+    ) -> CodexResult<ForkedThread> {
         // `forked_from_id()` describes this history's existing lineage. When
         // forking a resumed thread, the child copies the resumed thread itself.
         let source_thread_id = match &history {
@@ -1030,13 +1059,14 @@ impl ThreadManager {
             .await;
         let interrupted_marker =
             InterruptedTurnHistoryMarker::from_config_and_version(&config, multi_agent_version);
-        let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
+        let history = fork_history_from_snapshot(snapshot, history, interrupted_marker)?;
+        let selected_history = history.get_rollout_items().to_vec();
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
         );
         let agent_control = self.agent_control_for_config(&config);
-        Box::pin(self.state.spawn_thread(
+        let new_thread = Box::pin(self.state.spawn_thread(
             config,
             history,
             Arc::clone(&self.state.auth_manager),
@@ -1052,7 +1082,11 @@ impl ThreadManager {
             supports_openai_form_elicitation,
             /*user_shell_override*/ None,
         ))
-        .await
+        .await?;
+        Ok(ForkedThread {
+            new_thread,
+            selected_history,
+        })
     }
 
     pub(crate) fn agent_control(&self) -> AgentControl {
@@ -1814,15 +1848,21 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
     };
 
     // Synthetic fork/resume histories can contain user/assistant response items
-    // without explicit turn lifecycle events. If the persisted snapshot has no
-    // terminating boundary after its last user message, treat it as mid-turn.
+    // without explicit turn lifecycle events. Legacy rollouts may also persist
+    // the same user message as an EventMsg after the raw response item, which is
+    // still user-only history. Any other non-terminal suffix after the last raw
+    // user message belongs to an unfinished turn.
+    let suffix_after_last_user = &rollout_items[last_user_position + 1..];
     SnapshotTurnState {
-        ends_mid_turn: !rollout_items[last_user_position + 1..].iter().any(|item| {
-            matches!(
-                item,
-                RolloutItem::EventMsg(EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
-            )
-        }),
+        ends_mid_turn: suffix_after_last_user
+            .iter()
+            .any(|item| !matches!(item, RolloutItem::EventMsg(EventMsg::UserMessage(_))))
+            && !suffix_after_last_user.iter().any(|item| {
+                matches!(
+                    item,
+                    RolloutItem::EventMsg(EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
+                )
+            }),
         active_turn_id: None,
         active_turn_start_index: None,
     }
@@ -1832,12 +1872,12 @@ fn fork_history_from_snapshot(
     snapshot: ForkSnapshot,
     history: InitialHistory,
     interrupted_marker: InterruptedTurnHistoryMarker,
-) -> InitialHistory {
+) -> CodexResult<InitialHistory> {
     let snapshot_state = snapshot_turn_state(&history);
     match snapshot {
-        ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
-            truncate_before_nth_user_message(history, nth_user_message, &snapshot_state)
-        }
+        ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => Ok(
+            truncate_before_nth_user_message(history, nth_user_message, &snapshot_state),
+        ),
         ForkSnapshot::Interrupted => {
             let history = match history {
                 InitialHistory::New => InitialHistory::New,
@@ -1848,16 +1888,66 @@ fn fork_history_from_snapshot(
                 }
             };
             if snapshot_state.ends_mid_turn {
-                append_interrupted_boundary(
+                Ok(append_interrupted_boundary(
                     history,
                     snapshot_state.active_turn_id,
                     interrupted_marker,
-                )
+                ))
             } else {
-                history
+                Ok(history)
             }
         }
+        ForkSnapshot::NonInterrupting => {
+            truncate_to_last_sampling_boundary(history, &snapshot_state)
+        }
     }
+}
+
+fn truncate_to_last_sampling_boundary(
+    history: InitialHistory,
+    snapshot_state: &SnapshotTurnState,
+) -> CodexResult<InitialHistory> {
+    if !snapshot_state.ends_mid_turn {
+        return Ok(match history {
+            InitialHistory::New => InitialHistory::New,
+            InitialHistory::Cleared => InitialHistory::Cleared,
+            InitialHistory::Forked(history) => InitialHistory::Forked(history),
+            InitialHistory::Resumed(resumed) => {
+                InitialHistory::Forked(Arc::unwrap_or_clone(resumed.history))
+            }
+        });
+    }
+
+    let items = history.get_rollout_items();
+    let Some(active_turn_start_index) = snapshot_state.active_turn_start_index else {
+        return Err(CodexErr::InvalidRequest(
+            "cannot fork active thread without interrupting: no stable sampling boundary is available"
+                .to_string(),
+        ));
+    };
+    let Some(last_boundary_position) = truncation::sampling_boundary_positions_in_rollout(items)
+        .into_iter()
+        .rev()
+        .find(|position| *position >= active_turn_start_index)
+    else {
+        return Err(CodexErr::InvalidRequest(
+            "cannot fork active thread without interrupting: no stable sampling boundary is available"
+                .to_string(),
+        ));
+    };
+    let mut selected = items[..=last_boundary_position].to_vec();
+    if let Some(turn_id) = snapshot_state.active_turn_id.clone() {
+        selected.push(RolloutItem::EventMsg(EventMsg::TurnComplete(
+            TurnCompleteEvent {
+                turn_id,
+                last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            },
+        )));
+    }
+    Ok(InitialHistory::Forked(selected))
 }
 
 /// Append the same persisted interrupt boundary used by the live interrupt path

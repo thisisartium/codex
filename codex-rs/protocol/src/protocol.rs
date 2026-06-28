@@ -2140,6 +2140,12 @@ pub struct TokenCountEvent {
     pub rate_limits: Option<RateLimitSnapshot>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SamplingBoundaryEvent {
+    pub turn_id: String,
+    pub window_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct RateLimitSnapshot {
     pub limit_id: Option<String>,
@@ -2666,6 +2672,7 @@ impl InitialHistory {
                 | RolloutItem::InterAgentCommunicationMetadata { .. }
                 | RolloutItem::Compacted(_)
                 | RolloutItem::WorldState(_)
+                | RolloutItem::SamplingBoundary(_)
                 | RolloutItem::EventMsg(_) => None,
             })
             .and_then(|turn_context| turn_context.multi_agent_mode)
@@ -3002,6 +3009,7 @@ fn multi_agent_version_from_items(
             | RolloutItem::InterAgentCommunicationMetadata { .. }
             | RolloutItem::Compacted(_)
             | RolloutItem::WorldState(_)
+            | RolloutItem::SamplingBoundary(_)
             | RolloutItem::EventMsg(_) => None,
         })
     })
@@ -3164,6 +3172,7 @@ pub enum RolloutItem {
     Compacted(CompactedItem),
     TurnContext(TurnContextItem),
     WorldState(WorldStateItem),
+    SamplingBoundary(SamplingBoundaryEvent),
     EventMsg(EventMsg),
 }
 

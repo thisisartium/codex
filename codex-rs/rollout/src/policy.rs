@@ -13,7 +13,8 @@ pub fn is_persisted_rollout_item(item: &RolloutItem) -> bool {
         RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::WorldState(_)
-        | RolloutItem::SessionMeta(_) => true,
+        | RolloutItem::SessionMeta(_)
+        | RolloutItem::SamplingBoundary(_) => true,
     }
 }
 

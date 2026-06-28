@@ -561,6 +561,24 @@ pub struct ThreadForkParams {
     #[experimental("thread/fork.excludeTurns")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
+    /// How to fork a currently active source thread.
+    ///
+    /// Omitted preserves the legacy interrupted snapshot behavior. Use
+    /// `nonInterrupting` to fork from an existing stable source-owned sampling
+    /// boundary without cancelling or mutating the source thread.
+    #[experimental("thread/fork.activeForkMode")]
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub active_fork_mode: Option<ThreadForkActiveMode>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ThreadForkActiveMode {
+    Interrupt,
+    NonInterrupting,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
