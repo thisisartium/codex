@@ -186,6 +186,16 @@ jobs:
           set -euo pipefail
 
           bazel_test_query='tests(//...) except tests(//third_party/v8:all) except attr(tags, "manual", tests(//...))'
+          if [[ -z "${BUILDBUDDY_API_KEY:-}" ]]; then
+            # Without authenticated RBE, this job falls back from Windows
+            # cross-compile to native hosted Windows tests. Keep that fallback
+            # focused on stable target-level Windows coverage; the
+            # subprocess/ConPTY-heavy suites below are covered by Linux/macOS
+            # PR jobs and the native Windows main-branch lane.
+            bazel_test_query="${bazel_test_query} except //codex-rs/core:core-all-test"
+            bazel_test_query="${bazel_test_query} except //codex-rs/shell-command:shell-command-unit-tests"
+            bazel_test_query="${bazel_test_query} except //codex-rs/utils/pty:pty-unit-tests"
+          fi
           mapfile -t bazel_targets < <(
             ./.github/scripts/run-bazel-query-ci.sh --output=label -- "${bazel_test_query}" \
               | LC_ALL=C sort
