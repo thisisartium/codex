@@ -1535,7 +1535,7 @@ fn completed_legacy_event_history_is_not_mid_turn() {
 }
 
 #[test]
-fn mixed_response_and_legacy_user_event_history_is_mid_turn() {
+fn mixed_response_and_legacy_user_event_history_is_not_mid_turn() {
     let mixed_history = InitialHistory::Forked(vec![
         RolloutItem::ResponseItem(user_msg("hello")),
         RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
@@ -1545,6 +1545,35 @@ fn mixed_response_and_legacy_user_event_history_is_mid_turn() {
             text_elements: Vec::new(),
             local_images: Vec::new(),
             ..Default::default()
+        })),
+    ]);
+
+    assert_eq!(
+        snapshot_turn_state(&mixed_history),
+        SnapshotTurnState {
+            ends_mid_turn: false,
+            active_turn_id: None,
+            active_turn_start_index: None,
+        },
+    );
+}
+
+#[test]
+fn mixed_response_and_legacy_user_event_with_agent_output_is_mid_turn() {
+    let mixed_history = InitialHistory::Forked(vec![
+        RolloutItem::ResponseItem(user_msg("hello")),
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
+            message: "hello".to_string(),
+            images: None,
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+            ..Default::default()
+        })),
+        RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+            message: "partial".to_string(),
+            phase: None,
+            memory_citation: None,
         })),
     ]);
 
