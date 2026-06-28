@@ -403,6 +403,7 @@ crate.annotation(
     ],
     build_script_env = {
         "WEBRTC_SYS_DARWIN_SDK_PATH": "$(location @macos_sdk//sysroot)",
+        "WEBRTC_SYS_BAZEL_OUT_DIR_SCRATCH": "1",
         "WEBRTC_SYS_LINK_OUT_DIR": "1",
     },
     crate = "webrtc-sys",
@@ -410,6 +411,13 @@ crate.annotation(
     patch_args = ["-p1"],
     patches = [
         "//patches:webrtc-sys_hermetic_darwin_sysroot.patch",
+    ],
+)
+crate.annotation(
+    crate = "webrtc-sys-build",
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:webrtc-sys-build_bazel_out_dir_scratch.patch",
     ],
 )
 

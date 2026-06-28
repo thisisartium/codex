@@ -1,0 +1,41 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 2acdd60..4b083e1 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -87,7 +87,7 @@ pub fn use_debug() -> bool {
+ /// across multiple crates without dependencies constraints
+ /// This also has the benefit of not re-downloading the binaries for each crate
+ pub fn prebuilt_dir() -> path::PathBuf {
+-    let target_dir = scratch::path(SCRATH_PATH);
++    let target_dir = scratch_dir();
+     path::Path::new(&target_dir).join(format!(
+         "livekit/{}-{}/{}",
+         webrtc_triple(),
+@@ -98,6 +98,18 @@ pub fn prebuilt_dir() -> path::PathBuf {
+     ))
+ }
+ 
++fn scratch_dir() -> path::PathBuf {
++    if env::var_os("WEBRTC_SYS_BAZEL_OUT_DIR_SCRATCH").is_some() {
++        return path::PathBuf::from(
++            env::var_os("OUT_DIR")
++                .expect("OUT_DIR must be set when WEBRTC_SYS_BAZEL_OUT_DIR_SCRATCH is set"),
++        )
++        .join(SCRATH_PATH);
++    }
++
++    scratch::path(SCRATH_PATH)
++}
++
+ pub fn download_url() -> String {
+     format!(
+         "https://github.com/livekit/rust-sdks/releases/download/{}/{}.zip",
+@@ -197,7 +208,7 @@ pub fn configure_jni_symbols() -> Result<()> {
+ }
+ 
+ pub fn download_webrtc() -> Result<()> {
+-    let dir = scratch::path(SCRATH_PATH);
++    let dir = scratch_dir();
+     // temporary fix to avoid github workflow issue
+     fs::create_dir_all(&dir).context("Failed to create scratch_path")?;
+     let flock = File::create(dir.join(".lock"))
